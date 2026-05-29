@@ -14,6 +14,7 @@ import type { Habit, Heaviness, Priority, Todo, TodoStatus, Workflow } from "../
 
 const PREVIEW_BUBBLE_HEIGHT = 96;
 const HABIT_STORAGE_PREFIX = "taskomon:habit";
+const WORKFLOW_STORAGE_PREFIX = "taskomon:workflow";
 const PRIORITY_PREVIEW_STYLE: Record<
   Priority,
   { label: string; badge: string; dot: string; widthBoost: number; heightBoost: number }
@@ -67,8 +68,30 @@ const HEAVINESS_PREVIEW_STYLE: Record<
   },
 };
 
+type WorkflowRuntimeSummary = Pick<
+  Workflow,
+  "status" | "focusMinutes" | "restMinutes" | "updatedAt"
+>;
+
 function getHabitTodoStorageKey(habitId: string) {
   return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
+}
+
+function getWorkflowTodoStorageKey(workflowId: string) {
+  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:todos`;
+}
+
+function getWorkflowRuntimeStorageKey(workflowId: string) {
+  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:runtime`;
+}
+
+function getDefaultWorkflowRuntime(workflow: Workflow): WorkflowRuntimeSummary {
+  return {
+    status: workflow.status,
+    focusMinutes: workflow.focusMinutes,
+    restMinutes: workflow.restMinutes,
+    updatedAt: workflow.updatedAt,
+  };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -101,6 +124,12 @@ function getPreviewBubbleDimensions(
 function getInitialHabitTodos(habitId: string) {
   return demoTodos.filter(
     (todo) => todo.parentType === "habit" && todo.parentId === habitId
+  );
+}
+
+function getInitialWorkflowTodos(workflowId: string) {
+  return demoTodos.filter(
+    (todo) => todo.parentType === "workflow" && todo.parentId === workflowId
   );
 }
 
@@ -154,8 +183,9 @@ function clampScore(value: number) {
 }
 
 function getWorkflowTodos(workflow: Workflow) {
-  return demoTodos.filter(
-    (todo) => todo.parentType === "workflow" && todo.parentId === workflow.id
+  return loadFromStorage<Todo[]>(
+    getWorkflowTodoStorageKey(workflow.id),
+    getInitialWorkflowTodos(workflow.id)
   );
 }
 
@@ -367,7 +397,7 @@ function TaskomonMoodPanel({
   consistencyScore: number;
 }) {
   return (
-    <Panel title="Taskomon State">
+    <Panel title="Taskomon">
       <div className="rounded-2xl border border-orange-950/60 bg-[#0c0908] p-5 text-center shadow-inner">
         <img
           src={taskomonImage}
@@ -454,9 +484,14 @@ function DashboardPage() {
 
   const workflowSummaries = demoWorkflows.map((workflow) => {
     const todos = getWorkflowTodos(workflow);
+    const runtime = loadFromStorage<WorkflowRuntimeSummary>(
+      getWorkflowRuntimeStorageKey(workflow.id),
+      getDefaultWorkflowRuntime(workflow)
+    );
 
     return {
       workflow,
+      runtime,
       todos,
       progress: getTodoProgress(todos),
     };
@@ -594,7 +629,11 @@ function DashboardPage() {
               to="/habit"
             />
 
-              <HexButton label="Workflow" to="/dashboard" />
+              <HexButton
+                active={location.pathname.startsWith("/workflow")}
+                label="Workflow"
+                to="/workflow"
+              />
               <HexButton label="Advice" to="/dashboard" />
             </nav>
           </div>
@@ -631,10 +670,10 @@ function DashboardPage() {
             <div className="flex h-full items-center justify-between gap-5">
               <div>
                 <p className="text-[11px] font-black uppercase tracking-[0.24em] text-amber-300">
-                  System Overview
+                  Organize your Task with
                 </p>
-                <h2 className="mt-0.5 text-lg font-black tracking-tight text-white">
-                  Operational Core Console
+                <h2 className="mt-0.8 text-[32px] font-black tracking-tight text-white">
+                  Taskomon
                 </h2>
               </div>
               <div className="text-right shrink-0 rounded-2xl border border-orange-300/15 bg-orange-500/5 px-4 py-1.5">
@@ -667,10 +706,10 @@ function DashboardPage() {
                       </p>
                       <div className="mt-4 flex flex-wrap gap-2">
                         <Link
-                          to="/habit"
+                          to={heavyActiveTodo ? "/workflow" : "/habit"}
                           className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black text-white transition hover:brightness-110"
                         >
-                          Open habit
+                          {heavyActiveTodo ? "Open workflow" : "Open habit"}
                         </Link>
                         <button className="rounded-xl border border-sky-400/30 bg-sky-500/10 px-4 py-2 text-xs font-bold text-sky-100 transition hover:bg-sky-500/20">
                           Ask advice
@@ -693,7 +732,7 @@ function DashboardPage() {
                 </div>
 
                 {/* Habit Realms Grid */}
-              <Panel title="Habit Spaces Framework" action="View all units">
+              <Panel title="Habit Workpaces" action="View all">
                 <div className="grid gap-3 md:grid-cols-2">
                   {habitSummaries.map((summary) => (
                   <Link
@@ -716,22 +755,27 @@ function DashboardPage() {
               </Panel>
 
                 {/* Workflows Framework */}
-                <Panel title="Active Workflow Complexes" action="Inspect pipelines">
+                <Panel title="Workflow Workspaces" action="View All">
                   <div className="grid gap-3">
                     {workflowSummaries.map((summary) => (
-                      <WorkspaceCard
+                      <Link
                         key={summary.workflow.id}
-                        title={summary.workflow.title}
-                        description={summary.workflow.description}
-                        status={summary.workflow.status}
-                        progress={summary.progress}
-                      />
+                        to={`/workflow/${summary.workflow.id}`}
+                        className="block"
+                      >
+                        <WorkspaceCard
+                          title={summary.workflow.title}
+                          description={summary.workflow.description}
+                          status={summary.runtime.status}
+                          progress={summary.progress}
+                        />
+                      </Link>
                     ))}
                   </div>
                 </Panel>
 
                 {/* Authentic Fluid-Bubble Node Previewer */}
-                <Panel title="Live Node Matrix Preview">
+                <Panel title="To-do preview">
                   <div className="flex flex-wrap items-center justify-start gap-5 p-2 bg-[#0c0908]/50 rounded-2xl border border-orange-950/40">
                     {previewTodos.map((todo, i) => {
                       const theme = getBubbleTheme(todo.status as TodoStatus);
@@ -840,7 +884,7 @@ function DashboardPage() {
                   </div>
                 </Panel>
 
-                <Panel title="Raw Telemetry Stream">
+                <Panel title="Taskomon Analysis">
                   <div className="flex flex-col gap-2.5">
                     {demoTaskomonComments.map((comment) => (
                       <div
@@ -858,14 +902,20 @@ function DashboardPage() {
                   </div>
                 </Panel>
 
-                <Panel title="Command Directives">
+                <Panel title="Navigate">
                   <div className="grid gap-2">
-                    <button className="rounded-xl border border-orange-500/30 bg-gradient-to-r from-orange-500/10 to-amber-500/5 px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100 transition hover:brightness-125">
+                    <Link
+                      to="/workflow"
+                      className="rounded-xl border border-orange-500/30 bg-gradient-to-r from-orange-500/10 to-amber-500/5 px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100 transition hover:brightness-125"
+                    >
                       + Initialise Workflow Pipeline
-                    </button>
-                    <button className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100">
+                    </Link>
+                    <Link
+                      to="/habit"
+                      className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100"
+                    >
                       + Construct Habit Node
-                    </button>
+                    </Link>
                     <button className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100">
                       ? Request AI Assessment
                     </button>

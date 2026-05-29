@@ -2,9 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoHabits, demoTodos } from "../data/demoData";
+import { demoTodos, demoWorkflows } from "../data/demoData";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
-import type { DueMode, Heaviness, Priority, Todo, TodoStatus } from "../types";
+import type {
+  Heaviness,
+  PomodoroPhase,
+  PomodoroTimerState,
+  Priority,
+  Todo,
+  TodoStatus,
+  Workflow,
+} from "../types";
 
 type DragState = {
   todoId: string;
@@ -32,12 +40,18 @@ type EditorDragState = {
   startTop: number;
 };
 
+type WorkflowRuntime = {
+  status: Workflow["status"];
+  focusMinutes: number;
+  restMinutes: number;
+  updatedAt: string;
+};
+
 const BASE_BUBBLE_HEIGHT = 128;
 const WORLD_WIDTH = 2800;
 const WORLD_HEIGHT = 1800;
-const HABIT_STORAGE_PREFIX = "taskomon:habit";
-const LAST_OPENED_HABIT_KEY = "taskomon:lastOpenedHabitId";
-const DEFAULT_DUE_TIME = "18:00";
+const WORKFLOW_STORAGE_PREFIX = "taskomon:workflow";
+const LAST_OPENED_WORKFLOW_KEY = "taskomon:lastOpenedWorkflowId";
 const PRIORITY_STYLE: Record<
   Priority,
   {
@@ -111,11 +125,41 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+function getWorkflowTodoStorageKey(workflowId: string) {
+  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:todos`;
+}
+
+function getWorkflowRuntimeStorageKey(workflowId: string) {
+  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:runtime`;
+}
+
+function getDefaultRuntime(workflow: Workflow): WorkflowRuntime {
+  return {
+    status: workflow.status,
+    focusMinutes: workflow.focusMinutes,
+    restMinutes: workflow.restMinutes,
+    updatedAt: workflow.updatedAt,
+  };
+}
+
+function getInitialWorkflowTodos(workflowId: string) {
+  return demoTodos
+    .filter((todo) => todo.parentType === "workflow" && todo.parentId === workflowId)
+    .map((todo, index) => ({
+      ...todo,
+      x: todo.x + (index === 0 ? 380 : 460),
+      y: todo.y + 260,
+      priority: todo.priority ?? "medium",
+      heaviness: todo.heaviness ?? "medium",
+      dueMode: undefined,
+      dueTime: undefined,
+    }));
+}
+
 function getBubbleDimensions(todo: Pick<Todo, "title" | "priority" | "heaviness">) {
   const priority = todo.priority ?? "medium";
   const heaviness = todo.heaviness ?? "medium";
-  const titleLength = todo.title.trim().length;
-  const titleBoost = Math.max(0, titleLength - 14) * 5.5;
+  const titleBoost = Math.max(0, todo.title.trim().length - 14) * 5.5;
   const width = clamp(
     138 + PRIORITY_STYLE[priority].widthBoost + titleBoost,
     126,
@@ -142,7 +186,10 @@ function getBubbleCenter(todo: Todo) {
   };
 }
 
-function getEdgePoint(from: ReturnType<typeof getBubbleCenter>, to: ReturnType<typeof getBubbleCenter>) {
+function getEdgePoint(
+  from: ReturnType<typeof getBubbleCenter>,
+  to: ReturnType<typeof getBubbleCenter>
+) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
 
@@ -160,77 +207,38 @@ function getEdgePoint(from: ReturnType<typeof getBubbleCenter>, to: ReturnType<t
   };
 }
 
-function getHabitTodoStorageKey(habitId: string) {
-  return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
+function getNextStatus(status: TodoStatus): TodoStatus {
+  if (status === "not_started") return "in_progress";
+  if (status === "in_progress") return "done";
+  return "not_started";
 }
 
-function getInitialHabitTodos(habitId: string) {
-  const habitTodos = demoTodos.filter(
-    (todo) => todo.parentType === "habit" && todo.parentId === habitId
-  );
+function getStatusLabel(status: TodoStatus) {
+  if (status === "in_progress") return "Doing";
+  if (status === "done") return "Done";
+  return "Idle";
+}
 
-  if (habitTodos.length <= 1) {
-    return habitTodos.map((todo) => ({
-      ...todo,
-      x: todo.x + 420,
-      y: todo.y + 320,
-    }));
-  }
-
-  return habitTodos.map((todo, index) => {
-    const shouldAttachDependency = index === 1 && todo.dependencyIds.length === 0;
-
+function getBubbleTheme(status: TodoStatus) {
+  if (status === "done") {
     return {
-      ...todo,
-      priority: todo.priority ?? (index === 0 ? "high" : "medium"),
-      heaviness: todo.heaviness ?? (index === 0 ? "light" : "medium"),
-      dueMode: todo.dueMode ?? (index === 0 ? "by_time" : "anytime"),
-      dueTime: todo.dueTime ?? (index === 0 ? "12:00" : undefined),
-      dependencyIds: shouldAttachDependency ? [habitTodos[0].id] : todo.dependencyIds,
-      x: shouldAttachDependency ? 720 : todo.x + 420,
-      y: shouldAttachDependency ? 450 : todo.y + 320,
+      shell: "border-emerald-300/75 bg-emerald-500/22 shadow-[0_0_34px_rgba(16,185,129,0.22)]",
+      glow: "bg-emerald-300/28",
+      label: "text-emerald-50 border-emerald-200/45 bg-emerald-400/18",
     };
-  });
-}
-
-function getDueLabel(todo: Todo) {
-  if (!todo.dueMode || todo.dueMode === "anytime") return "Anytime";
-  if (todo.dueMode === "by_time") return `By ${todo.dueTime ?? "--:--"}`;
-  return `At ${todo.dueTime ?? "--:--"}`;
-}
-
-function getDueMinutes(todo: Todo) {
-  if (!todo.dueTime) return null;
-
-  const [hours, minutes] = todo.dueTime.split(":").map(Number);
-  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
-
-  return hours * 60 + minutes;
-}
-
-function getNowMinutes() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
-}
-
-function isTodoLate(todo: Todo) {
-  const dueMinutes = getDueMinutes(todo);
-  return (
-    todo.status !== "done" &&
-    todo.dueMode !== "anytime" &&
-    dueMinutes !== null &&
-    dueMinutes < getNowMinutes()
-  );
-}
-
-function isTodoSoon(todo: Todo) {
-  const dueMinutes = getDueMinutes(todo);
-  if (todo.status === "done" || todo.dueMode === "anytime" || dueMinutes === null) {
-    return false;
   }
-
-  const diff = dueMinutes - getNowMinutes();
-  return diff >= 0 && diff <= 60;
+  if (status === "in_progress") {
+    return {
+      shell: "border-orange-300/80 bg-orange-500/22 shadow-[0_0_38px_rgba(249,115,22,0.26)]",
+      glow: "bg-orange-300/30",
+      label: "text-orange-50 border-orange-200/50 bg-orange-400/18",
+    };
+  }
+  return {
+    shell: "border-rose-300/45 bg-rose-500/14 shadow-[0_0_28px_rgba(244,63,94,0.12)]",
+    glow: "bg-rose-300/16",
+    label: "text-rose-50/80 border-rose-200/30 bg-rose-400/12",
+  };
 }
 
 function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
@@ -238,52 +246,6 @@ function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
     const dependency = allTodos.find((item) => item.id === dependencyId);
     return dependency && dependency.status !== "done";
   });
-}
-
-function getHabitAttentionScore(habitId: string) {
-  const todos = loadFromStorage<Todo[]>(
-    getHabitTodoStorageKey(habitId),
-    getInitialHabitTodos(habitId)
-  );
-  const lateCount = todos.filter(isTodoLate).length;
-  const blockedCount = todos.filter((todo) => isTodoBlocked(todo, todos)).length;
-  const dueSoonCount = todos.filter(isTodoSoon).length;
-  const inProgressCount = todos.filter((todo) => todo.status === "in_progress").length;
-  const unfinishedCount = todos.filter((todo) => todo.status !== "done").length;
-  const heavyUnfinishedCount = todos.filter(
-    (todo) => todo.status !== "done" && todo.heaviness === "heavy"
-  ).length;
-
-  return (
-    lateCount * 1000 +
-    blockedCount * 600 +
-    dueSoonCount * 350 +
-    inProgressCount * 180 +
-    heavyUnfinishedCount * 80 +
-    unfinishedCount * 20
-  );
-}
-
-function getMostAttentionHabitId() {
-  return [...demoHabits].sort(
-    (a, b) => getHabitAttentionScore(b.id) - getHabitAttentionScore(a.id)
-  )[0]?.id;
-}
-
-function getHabitRouteTarget(routeHabitId?: string) {
-  if (routeHabitId && demoHabits.some((habit) => habit.id === routeHabitId)) {
-    return routeHabitId;
-  }
-
-  const lastOpenedHabitId = sessionStorage.getItem(LAST_OPENED_HABIT_KEY);
-  if (
-    lastOpenedHabitId &&
-    demoHabits.some((habit) => habit.id === lastOpenedHabitId)
-  ) {
-    return lastOpenedHabitId;
-  }
-
-  return getMostAttentionHabitId() ?? demoHabits[0]?.id;
 }
 
 function wouldCreateDependencyCycle(
@@ -307,43 +269,60 @@ function wouldCreateDependencyCycle(
   return dependencyChainContains(dependencyId);
 }
 
-function getNextStatus(status: TodoStatus): TodoStatus {
-  if (status === "not_started") return "in_progress";
-  if (status === "in_progress") return "done";
-  return "not_started";
+function formatClock(totalSeconds: number) {
+  const safeSeconds = Math.max(0, totalSeconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function getStatusLabel(status: TodoStatus) {
-  if (status === "not_started") return "Not Started";
-  if (status === "in_progress") return "Doing";
-  return "Done";
+function getWorkflowAttentionScore(workflow: Workflow) {
+  const todos = loadFromStorage<Todo[]>(
+    getWorkflowTodoStorageKey(workflow.id),
+    getInitialWorkflowTodos(workflow.id)
+  );
+  const runtime = loadFromStorage<WorkflowRuntime>(
+    getWorkflowRuntimeStorageKey(workflow.id),
+    getDefaultRuntime(workflow)
+  );
+  const activeCount = todos.filter((todo) => todo.status === "in_progress").length;
+  const blockedCount = todos.filter((todo) => isTodoBlocked(todo, todos)).length;
+  const heavyOpenCount = todos.filter(
+    (todo) => todo.status !== "done" && todo.heaviness === "heavy"
+  ).length;
+  const unfinishedCount = todos.filter((todo) => todo.status !== "done").length;
+  const statusWeight =
+    runtime.status === "active" ? 500 : runtime.status === "held" ? 180 : 0;
+
+  return (
+    statusWeight +
+    activeCount * 500 +
+    blockedCount * 280 +
+    heavyOpenCount * 160 +
+    unfinishedCount * 60
+  );
 }
 
-function getBubbleTheme(status: TodoStatus) {
-  if (status === "done") {
-    return {
-      shell:
-        "border-emerald-300/75 bg-emerald-500/22 shadow-[0_0_34px_rgba(16,185,129,0.22)]",
-      glow: "bg-emerald-300/28",
-      label: "text-emerald-50 border-emerald-200/45 bg-emerald-400/18",
-    };
+function getWorkflowRouteTarget(routeWorkflowId?: string) {
+  if (
+    routeWorkflowId &&
+    demoWorkflows.some((workflow) => workflow.id === routeWorkflowId)
+  ) {
+    return routeWorkflowId;
   }
 
-  if (status === "in_progress") {
-    return {
-      shell:
-        "border-orange-300/80 bg-orange-500/22 shadow-[0_0_38px_rgba(249,115,22,0.26)]",
-      glow: "bg-orange-300/30",
-      label: "text-orange-50 border-orange-200/50 bg-orange-400/18",
-    };
+  const lastOpenedWorkflowId = sessionStorage.getItem(LAST_OPENED_WORKFLOW_KEY);
+  if (
+    lastOpenedWorkflowId &&
+    demoWorkflows.some((workflow) => workflow.id === lastOpenedWorkflowId)
+  ) {
+    return lastOpenedWorkflowId;
   }
 
-  return {
-    shell:
-      "border-rose-300/45 bg-rose-500/14 shadow-[0_0_28px_rgba(244,63,94,0.12)]",
-    glow: "bg-rose-300/16",
-    label: "text-rose-50/80 border-rose-200/30 bg-rose-400/12",
-  };
+  return [...demoWorkflows].sort(
+    (a, b) => getWorkflowAttentionScore(b) - getWorkflowAttentionScore(a)
+  )[0]?.id;
 }
 
 function NavButton({
@@ -370,12 +349,10 @@ function NavButton({
   );
 }
 
-function HabitBubble({
+function WorkflowBubble({
   todo,
   isDragging,
   isBlocked,
-  isLate,
-  isSoon,
   onStartDrag,
   onCycleStatus,
   onEditTodo,
@@ -383,8 +360,6 @@ function HabitBubble({
   todo: Todo;
   isDragging: boolean;
   isBlocked: boolean;
-  isLate: boolean;
-  isSoon: boolean;
   onStartDrag: (event: PointerEvent<HTMLDivElement>, todo: Todo) => void;
   onCycleStatus: (todoId: string) => void;
   onEditTodo: (todoId: string) => void;
@@ -417,9 +392,7 @@ function HabitBubble({
         transform: `translate(${todo.x}px, ${todo.y}px) ${
           isDragging ? "scale(1.06)" : "scale(1)"
         }`,
-        transition: isDragging
-          ? "filter 120ms ease"
-          : "transform 220ms cubic-bezier(.2,.9,.2,1), filter 160ms ease",
+        animationDuration: `${3.8 + todo.title.length * 0.04}s`,
       }}
     >
       <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full p-4 text-center">
@@ -447,17 +420,8 @@ function HabitBubble({
             {todo.title}
           </p>
 
-          <p
-            className={[
-              "mt-1 text-[10px] font-bold",
-              isLate
-                ? "text-rose-200"
-                : isSoon
-                ? "text-amber-200"
-                : "text-neutral-300/80",
-            ].join(" ")}
-          >
-            {getDueLabel(todo)}
+          <p className="mt-1 line-clamp-1 text-[10px] font-bold text-neutral-300/70 [overflow-wrap:anywhere]">
+            {todo.description || "Workflow bubble"}
           </p>
 
           <div className="mt-1 flex flex-wrap justify-center gap-1">
@@ -513,17 +477,20 @@ function HabitBubble({
   );
 }
 
-function HabitWorkspacePage() {
+function WorkflowWorkspacePage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { habitId: routeHabitId } = useParams();
+  const { workflowId: routeWorkflowId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const activeHabitId = getHabitRouteTarget(routeHabitId) ?? demoHabits[0].id;
-  const habit =
-    demoHabits.find((habitItem) => habitItem.id === activeHabitId) ?? demoHabits[0];
-  const habitStorageKey = getHabitTodoStorageKey(habit.id);
+  const activeWorkflowId =
+    getWorkflowRouteTarget(routeWorkflowId) ?? demoWorkflows[0].id;
+  const workflow =
+    demoWorkflows.find((workflowItem) => workflowItem.id === activeWorkflowId) ??
+    demoWorkflows[0];
+  const workflowStorageKey = getWorkflowTodoStorageKey(workflow.id);
+  const workflowRuntimeStorageKey = getWorkflowRuntimeStorageKey(workflow.id);
 
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [panState, setPanState] = useState<PanState | null>(null);
@@ -533,8 +500,6 @@ function HabitWorkspacePage() {
   const [editorDragState, setEditorDragState] =
     useState<EditorDragState | null>(null);
   const [newTodoTitle, setNewTodoTitle] = useState("");
-  const [newTodoDueMode, setNewTodoDueMode] = useState<DueMode>("anytime");
-  const [newTodoDueTime, setNewTodoDueTime] = useState(DEFAULT_DUE_TIME);
   const [newTodoPriority, setNewTodoPriority] = useState<Priority>("medium");
   const [newTodoHeaviness, setNewTodoHeaviness] = useState<Heaviness>("medium");
   const [newTodoDependencyId, setNewTodoDependencyId] = useState("");
@@ -542,76 +507,157 @@ function HabitWorkspacePage() {
   const [editingTodoId, setEditingTodoId] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
-  const [editDueMode, setEditDueMode] = useState<DueMode>("anytime");
-  const [editDueTime, setEditDueTime] = useState(DEFAULT_DUE_TIME);
   const [editPriority, setEditPriority] = useState<Priority>("medium");
   const [editHeaviness, setEditHeaviness] = useState<Heaviness>("medium");
   const [editDependencyId, setEditDependencyId] = useState("");
   const [taskomonNoticeState, setTaskomonNoticeState] = useState({
-    habitId: habit.id,
+    workflowId: workflow.id,
     message: "",
   });
   const [lastCompletionTitle, setLastCompletionTitle] = useState("");
+  const [timerPhase, setTimerPhase] = useState<PomodoroPhase>("focus");
+  const [timerSeconds, setTimerSeconds] = useState(workflow.focusMinutes * 60);
+  const [timerRunning, setTimerRunning] = useState(false);
 
+  const [workflowRuntimeState, setWorkflowRuntimeState] = useState<{
+    workflowId: string;
+    runtime: WorkflowRuntime;
+  }>(() => ({
+    workflowId: workflow.id,
+    runtime: loadFromStorage(
+      workflowRuntimeStorageKey,
+      getDefaultRuntime(workflow)
+    ),
+  }));
   const [todoState, setTodoState] = useState<{
-    habitId: string;
+    workflowId: string;
     items: Todo[];
   }>(() => ({
-    habitId: habit.id,
-    items: loadFromStorage(habitStorageKey, getInitialHabitTodos(habit.id)),
+    workflowId: workflow.id,
+    items: loadFromStorage(
+      workflowStorageKey,
+      getInitialWorkflowTodos(workflow.id)
+    ),
   }));
+
+  const runtime =
+    workflowRuntimeState.workflowId === workflow.id
+      ? workflowRuntimeState.runtime
+      : loadFromStorage(workflowRuntimeStorageKey, getDefaultRuntime(workflow));
   const todos =
-    todoState.habitId === habit.id
+    todoState.workflowId === workflow.id
       ? todoState.items
-      : loadFromStorage(habitStorageKey, getInitialHabitTodos(habit.id));
+      : loadFromStorage(workflowStorageKey, getInitialWorkflowTodos(workflow.id));
   const taskomonNotice =
-    taskomonNoticeState.habitId === habit.id
+    taskomonNoticeState.workflowId === workflow.id
       ? taskomonNoticeState.message
       : "";
-
   const editingTodo = todos.find((todo) => todo.id === editingTodoId);
+  const timerState: PomodoroTimerState = {
+    phase: timerPhase,
+    remainingSeconds: timerSeconds,
+    running: timerRunning,
+    focusMinutes: runtime.focusMinutes,
+    restMinutes: runtime.restMinutes,
+  };
 
   function setTaskomonNotice(message: string) {
-    setTaskomonNoticeState({ habitId: habit.id, message });
+    setTaskomonNoticeState({ workflowId: workflow.id, message });
   }
 
   function setTodos(updater: Todo[] | ((currentTodos: Todo[]) => Todo[])) {
     setTodoState((currentState) => {
       const currentTodos =
-        currentState.habitId === habit.id
+        currentState.workflowId === workflow.id
           ? currentState.items
-          : loadFromStorage(habitStorageKey, getInitialHabitTodos(habit.id));
+          : loadFromStorage(workflowStorageKey, getInitialWorkflowTodos(workflow.id));
       const nextItems =
         typeof updater === "function" ? updater(currentTodos) : updater;
 
       return {
-        habitId: habit.id,
-        items: nextItems,
+        workflowId: workflow.id,
+        items: nextItems.map((todo) => ({
+          ...todo,
+          dueMode: undefined,
+          dueTime: undefined,
+        })),
+      };
+    });
+  }
+
+  function setRuntime(
+    updater: WorkflowRuntime | ((currentRuntime: WorkflowRuntime) => WorkflowRuntime)
+  ) {
+    setWorkflowRuntimeState((currentState) => {
+      const currentRuntime =
+        currentState.workflowId === workflow.id
+          ? currentState.runtime
+          : loadFromStorage(workflowRuntimeStorageKey, getDefaultRuntime(workflow));
+      const nextRuntime =
+        typeof updater === "function" ? updater(currentRuntime) : updater;
+
+      return {
+        workflowId: workflow.id,
+        runtime: {
+          ...nextRuntime,
+          updatedAt: new Date().toISOString(),
+        },
       };
     });
   }
 
   useEffect(() => {
-    if (!routeHabitId || routeHabitId !== habit.id) {
-      navigate(`/habit/${habit.id}`, { replace: true });
+    if (!routeWorkflowId || routeWorkflowId !== workflow.id) {
+      navigate(`/workflow/${workflow.id}`, { replace: true });
     }
-  }, [habit.id, navigate, routeHabitId]);
+  }, [navigate, routeWorkflowId, workflow.id]);
 
   useEffect(() => {
-    sessionStorage.setItem(LAST_OPENED_HABIT_KEY, habit.id);
-  }, [habit.id]);
+    sessionStorage.setItem(LAST_OPENED_WORKFLOW_KEY, workflow.id);
+  }, [workflow.id]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setWorkflowRuntimeState({
+        workflowId: workflow.id,
+        runtime: loadFromStorage(
+          workflowRuntimeStorageKey,
+          getDefaultRuntime(workflow)
+        ),
+      });
+      setTodoState({
+        workflowId: workflow.id,
+        items: loadFromStorage(
+          workflowStorageKey,
+          getInitialWorkflowTodos(workflow.id)
+        ),
+      });
+      setEditingTodoId("");
+      setSelectedTodoId("");
+      setEditorPosition(null);
+      setTimerPhase("focus");
+      setTimerSeconds(workflow.focusMinutes * 60);
+      setTimerRunning(false);
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [workflow, workflowRuntimeStorageKey, workflowStorageKey]);
 
   useEffect(() => {
     if (
       todos.some(
-        (todo) => todo.parentId !== habit.id || todo.parentType !== "habit"
+        (todo) => todo.parentId !== workflow.id || todo.parentType !== "workflow"
       )
     ) {
       return;
     }
 
-    saveToStorage(habitStorageKey, todos);
-  }, [habit.id, habitStorageKey, todos]);
+    saveToStorage(workflowStorageKey, todos);
+  }, [todos, workflow.id, workflowStorageKey]);
+
+  useEffect(() => {
+    saveToStorage(workflowRuntimeStorageKey, runtime);
+  }, [runtime, workflowRuntimeStorageKey]);
 
   useEffect(() => {
     if (!lastCompletionTitle) return;
@@ -623,34 +669,84 @@ function HabitWorkspacePage() {
     return () => window.clearTimeout(timeoutId);
   }, [lastCompletionTitle]);
 
+  useEffect(() => {
+    if (!timerRunning) return;
+
+    const intervalId = window.setInterval(() => {
+      setTimerSeconds((currentSeconds) => {
+        if (currentSeconds > 1) {
+          return currentSeconds - 1;
+        }
+
+        if (timerPhase === "focus") {
+          setTimerPhase("rest");
+          setTaskomonNoticeState({
+            workflowId: workflow.id,
+            message: "Focus interval complete. Take the rest clock seriously.",
+          });
+          return runtime.restMinutes * 60;
+        }
+
+        setTimerPhase("focus");
+        setTaskomonNoticeState({
+          workflowId: workflow.id,
+          message: "Rest finished. Pick the next bubble when you are ready.",
+        });
+        return runtime.focusMinutes * 60;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    runtime.focusMinutes,
+    runtime.restMinutes,
+    timerPhase,
+    timerRunning,
+    workflow.id,
+  ]);
+
   const activeTodo = todos.find((todo) => todo.status === "in_progress");
   const completedCount = todos.filter((todo) => todo.status === "done").length;
   const blockedTodos = todos.filter(
     (todo) => todo.status !== "done" && isTodoBlocked(todo, todos)
   );
-  const lateTodos = todos.filter(isTodoLate);
-  const dueSoonTodos = todos.filter(isTodoSoon);
-  const nextDueTodo = todos
-    .filter((todo) => todo.status !== "done" && todo.dueMode !== "anytime")
-    .sort((a, b) => (getDueMinutes(a) ?? 9999) - (getDueMinutes(b) ?? 9999))[0];
-
+  const heavyOpenTodos = todos.filter(
+    (todo) => todo.status !== "done" && todo.heaviness === "heavy"
+  );
   const completionPercentage =
     todos.length === 0 ? 0 : Math.round((completedCount / todos.length) * 100);
-
+  const focusTotalSeconds = runtime.focusMinutes * 60;
+  const focusElapsedSeconds =
+    timerPhase === "focus" ? focusTotalSeconds - timerSeconds : 0;
+  const focusElapsedRatio =
+    focusTotalSeconds === 0 ? 0 : focusElapsedSeconds / focusTotalSeconds;
+  const timerProgress =
+    timerState.phase === "focus"
+      ? clamp((focusElapsedSeconds / focusTotalSeconds) * 100, 0, 100)
+      : clamp(
+          ((runtime.restMinutes * 60 - timerSeconds) /
+            (runtime.restMinutes * 60)) *
+            100,
+          0,
+          100
+        );
   const taskomonThought = taskomonNotice
     ? taskomonNotice
-    : lateTodos[0]
-    ? `"${lateTodos[0].title}" is past its planned time. Finish it gently or move it to a realistic slot.`
+    : runtime.status === "held"
+    ? "Workflow is held. I will keep the bubbles as they are until you resume."
+    : runtime.status === "completed"
+    ? "Workflow complete. That session can be archived or used as a reference."
+    : timerPhase === "rest"
+    ? "Rest interval is running. Let the brain cool down before the next bubble."
+    : activeTodo && activeTodo.heaviness === "heavy" && focusElapsedRatio > 0.35
+    ? `Your work on "${activeTodo.title}" is getting slower. Is the task getting difficult? You should take a rest or split it.`
+    : activeTodo && activeTodo.priority === "high"
+    ? `"${activeTodo.title}" is the current high-priority bubble. Stay with one clean action.`
     : blockedTodos[0]
-    ? `"${blockedTodos[0].title}" is waiting on another bubble. Clear the line before starting it.`
+    ? `"${blockedTodos[0].title}" is blocked by a dependency. Clear the connected bubble first.`
     : activeTodo
-    ? `You're working on "${activeTodo.title}". Keep it steady.`
-    : dueSoonTodos[0]
-    ? `"${dueSoonTodos[0].title}" is due soon. A small start now will help.`
-    : completedCount === todos.length && todos.length > 0
-    ? "All bubbles are done for now. Nice rhythm."
-    : "Pick a bubble to start. Small actions still count.";
-
+    ? `You are working on "${activeTodo.title}". Keep the check-ins steady.`
+    : "Start one workflow bubble and I will watch the rhythm from here.";
   const dependencyLines = useMemo(() => {
     return todos.flatMap((todo) => {
       return todo.dependencyIds
@@ -694,9 +790,10 @@ function HabitWorkspacePage() {
   function scrollToTodo(todoId: string) {
     const todo = todos.find((item) => item.id === todoId);
     if (!todo) return;
-    const center = getBubbleCenter(todo);
 
+    const center = getBubbleCenter(todo);
     scrollToWorldPoint(center.x, center.y);
+    setSelectedTodoId(todo.id);
   }
 
   function scrollToActiveTodo() {
@@ -722,23 +819,18 @@ function HabitWorkspacePage() {
       ...todos.map((todo) => todo.y + getBubbleDimensions(todo).height)
     );
 
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-
-    scrollToWorldPoint(centerX, centerY);
+    scrollToWorldPoint((minX + maxX) / 2, (minY + maxY) / 2);
   }
 
   function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
     if (dragState && worldRef.current) {
       const rect = worldRef.current.getBoundingClientRect();
-
       const rawX = event.clientX - rect.left - dragState.offsetX;
       const rawY = event.clientY - rect.top - dragState.offsetY;
       const draggedTodo = todos.find((todo) => todo.id === dragState.todoId);
       const dimensions = draggedTodo
         ? getBubbleDimensions(draggedTodo)
         : { width: BASE_BUBBLE_HEIGHT, height: BASE_BUBBLE_HEIGHT };
-
       const nextX = clamp(rawX, 16, WORLD_WIDTH - dimensions.width - 16);
       const nextY = clamp(rawY, 16, WORLD_HEIGHT - dimensions.height - 16);
 
@@ -872,7 +964,6 @@ function HabitWorkspacePage() {
 
   function handleCanvasPointerDown(event: PointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-
     if (target.closest("[data-bubble='true']")) return;
     if (!viewportRef.current) return;
 
@@ -890,118 +981,31 @@ function HabitWorkspacePage() {
     if (!viewportRef.current) return;
 
     event.preventDefault();
-
-    viewportRef.current.scrollBy({
-      left: event.deltaX + (event.shiftKey ? event.deltaY : 0),
-      top: event.shiftKey ? 0 : event.deltaY,
-    });
-  }
-
-  function handleCycleStatus(todoId: string) {
-    const targetTodo = todos.find((todo) => todo.id === todoId);
-    if (!targetTodo) return;
-
-    const nextStatus = getNextStatus(targetTodo.status);
-    const blocked = isTodoBlocked(targetTodo, todos);
-
-    if (blocked && targetTodo.status === "not_started" && nextStatus === "in_progress") {
-      setTaskomonNotice(
-        `"${targetTodo.title}" has an unfinished prerequisite. Follow the connecting line first.`
-      );
-      return;
-    }
-
-    const now = new Date().toISOString();
-
-    setTodos((currentTodos) =>
-      currentTodos.map((todo) => {
-        if (todo.id === todoId) {
-          return {
-            ...todo,
-            status: nextStatus,
-            startedAt: nextStatus === "in_progress" ? now : todo.startedAt,
-            completedAt: nextStatus === "done" ? now : undefined,
-            updatedAt: now,
-          };
-        }
-
-        if (nextStatus === "in_progress" && todo.status === "in_progress") {
-          return {
-            ...todo,
-            status: "not_started",
-            updatedAt: now,
-          };
-        }
-
-        return todo;
-      })
-    );
-
-    if (nextStatus === "done") {
-      setLastCompletionTitle(targetTodo.title);
-      setTaskomonNotice(`Nice finish on "${targetTodo.title}". That one should feel good.`);
-      return;
-    }
-
-    if (nextStatus === "in_progress") {
-      setTaskomonNotice(`Now tracking "${targetTodo.title}" as the current bubble.`);
-      return;
-    }
-
-    setTaskomonNotice(`"${targetTodo.title}" is back in the queue.`);
+    viewportRef.current.scrollLeft += event.deltaX;
+    viewportRef.current.scrollTop += event.deltaY;
   }
 
   function handleAddTodo() {
     const title = newTodoTitle.trim();
-    const viewport = viewportRef.current;
+    if (!title) return;
 
-    if (!title || !viewport) return;
-
-    const now = new Date().toISOString();
-
-    const worldCenterX = viewport.scrollLeft + viewport.clientWidth / 2;
-    const worldCenterY = viewport.scrollTop + viewport.clientHeight / 2;
-    const newTodoDimensions = getBubbleDimensions({
-      title,
-      priority: newTodoPriority,
-      heaviness: newTodoHeaviness,
-    });
     const dependencyTodo = todos.find((todo) => todo.id === newTodoDependencyId);
-    const dependencyDimensions = dependencyTodo
-      ? getBubbleDimensions(dependencyTodo)
-      : null;
-    const draftX =
-      dependencyTodo && dependencyDimensions
-        ? dependencyTodo.x + dependencyDimensions.width + 92
-        : worldCenterX - newTodoDimensions.width / 2;
-    const draftY =
-      dependencyTodo && dependencyDimensions
-        ? dependencyTodo.y +
-          dependencyDimensions.height / 2 -
-          newTodoDimensions.height / 2
-        : worldCenterY - newTodoDimensions.height / 2;
-
+    const baseX = dependencyTodo
+      ? dependencyTodo.x + getBubbleDimensions(dependencyTodo).width + 140
+      : 340 + todos.length * 44;
+    const baseY = dependencyTodo ? dependencyTodo.y + 16 : 300 + todos.length * 38;
+    const now = new Date().toISOString();
     const newTodo: Todo = {
       id: crypto.randomUUID(),
-      parentId: habit.id,
-      parentType: "habit",
+      parentId: workflow.id,
+      parentType: "workflow",
       title,
       description: "",
       status: "not_started",
-      x: clamp(
-        draftX,
-        16,
-        WORLD_WIDTH - newTodoDimensions.width - 16
-      ),
-      y: clamp(
-        draftY,
-        16,
-        WORLD_HEIGHT - newTodoDimensions.height - 16
-      ),
+      x: clamp(baseX, 40, WORLD_WIDTH - 260),
+      y: clamp(baseY, 40, WORLD_HEIGHT - 220),
       priority: newTodoPriority,
       heaviness: newTodoHeaviness,
-      dueMode: newTodoDueMode,
-      dueTime: newTodoDueMode === "anytime" ? undefined : newTodoDueTime,
       dependencyIds: newTodoDependencyId ? [newTodoDependencyId] : [],
       createdAt: now,
       updatedAt: now,
@@ -1009,45 +1013,95 @@ function HabitWorkspacePage() {
 
     setTodos((currentTodos) => [...currentTodos, newTodo]);
     setNewTodoTitle("");
-    setSelectedTodoId(newTodo.id);
     setNewTodoDependencyId("");
-    setTaskomonNotice(`Added "${newTodo.title}" to this habit space.`);
-
-    requestAnimationFrame(() => {
-      const center = getBubbleCenter(newTodo);
-      scrollToWorldPoint(center.x, center.y);
-    });
+    setSelectedTodoId(newTodo.id);
+    setTaskomonNotice(`Added "${title}" to the workflow session.`);
+    window.setTimeout(() => scrollToTodo(newTodo.id), 80);
   }
 
-  function handleResetHabitDay() {
+  function handleCycleStatus(todoId: string) {
+    const targetTodo = todos.find((todo) => todo.id === todoId);
+    if (!targetTodo) return;
+
+    const nextStatus = getNextStatus(targetTodo.status);
+    if (nextStatus === "in_progress" && isTodoBlocked(targetTodo, todos)) {
+      setTaskomonNotice(
+        `"${targetTodo.title}" is still blocked. Follow the dependency line first.`
+      );
+      return;
+    }
+
     const now = new Date().toISOString();
 
-    setTodos((currentTodos) =>
-      currentTodos.map((todo) => ({
-        ...todo,
-        status: "not_started",
-        startedAt: undefined,
-        completedAt: undefined,
-        updatedAt: now,
-      }))
-    );
-    setTaskomonNotice("Habit bubbles reset for the next check cycle.");
+    setTodos((currentTodos) => {
+      const nextTodos = currentTodos.map((todo) => {
+        if (nextStatus === "in_progress" && todo.status === "in_progress") {
+          return {
+            ...todo,
+            status: "not_started" as TodoStatus,
+            updatedAt: now,
+          };
+        }
+
+        if (todo.id !== todoId) return todo;
+
+        return {
+          ...todo,
+          status: nextStatus,
+          startedAt: nextStatus === "in_progress" ? now : todo.startedAt,
+          completedAt: nextStatus === "done" ? now : todo.completedAt,
+          updatedAt: now,
+        };
+      });
+
+      if (nextTodos.every((todo) => todo.status === "done") && nextTodos.length > 0) {
+        setRuntime((currentRuntime) => ({
+          ...currentRuntime,
+          status: "completed",
+        }));
+        setTimerRunning(false);
+      } else if (runtime.status === "completed") {
+        setRuntime((currentRuntime) => ({
+          ...currentRuntime,
+          status: "active",
+        }));
+      }
+
+      return nextTodos;
+    });
+
+    setSelectedTodoId(todoId);
+
+    if (nextStatus === "done") {
+      setLastCompletionTitle(targetTodo.title);
+      setTaskomonNotice(`Finished "${targetTodo.title}". That was a clean check.`);
+      return;
+    }
+
+    if (nextStatus === "in_progress") {
+      setRuntime((currentRuntime) => ({
+        ...currentRuntime,
+        status: "active",
+      }));
+      setTaskomonNotice(
+        targetTodo.heaviness === "heavy"
+          ? `"${targetTodo.title}" is heavy. I will watch for slowdown.`
+          : `Tracking "${targetTodo.title}" as the active workflow bubble.`
+      );
+      return;
+    }
+
+    setTaskomonNotice(`"${targetTodo.title}" moved back to idle.`);
   }
 
   function openTodoEditor(todoId: string) {
     const todo = todos.find((item) => item.id === todoId);
-    if (!todo) {
-      setSelectedTodoId("");
-      setEditingTodoId("");
-      return;
-    }
+    if (!todo) return;
 
-    setSelectedTodoId(todoId);
-    setEditingTodoId(todoId);
+    setSelectedTodoId(todo.id);
+    setEditingTodoId(todo.id);
     setEditTitle(todo.title);
     setEditDescription(todo.description ?? "");
-    setEditDueMode(todo.dueMode ?? "anytime");
-    setEditDueTime(todo.dueTime ?? DEFAULT_DUE_TIME);
     setEditPriority(todo.priority ?? "medium");
     setEditHeaviness(todo.heaviness ?? "medium");
     setEditDependencyId(todo.dependencyIds[0] ?? "");
@@ -1057,78 +1111,94 @@ function HabitWorkspacePage() {
     if (!editingTodo) return;
 
     const title = editTitle.trim();
-    if (!title) {
-      setTaskomonNotice("A bubble needs a title before Taskomon can track it.");
-      return;
-    }
+    if (!title) return;
 
-    if (editDependencyId === editingTodo.id) {
-      setTaskomonNotice("A bubble cannot depend on itself.");
-      return;
-    }
-
+    const dependencyIds = editDependencyId ? [editDependencyId] : [];
     if (
       editDependencyId &&
       wouldCreateDependencyCycle(editingTodo.id, editDependencyId, todos)
     ) {
-      setTaskomonNotice("That dependency would create a loop. Pick an earlier bubble.");
+      setTaskomonNotice("That dependency would create a loop between bubbles.");
       return;
     }
 
-    const now = new Date().toISOString();
-
     setTodos((currentTodos) =>
-      currentTodos.map((todo) => {
-        if (todo.id !== editingTodo.id) return todo;
-
-        const nextTodo: Todo = {
-          ...todo,
-          title,
-          description: editDescription.trim(),
-          priority: editPriority,
-          heaviness: editHeaviness,
-          dueMode: editDueMode,
-          dueTime: editDueMode === "anytime" ? undefined : editDueTime,
-          dependencyIds: editDependencyId ? [editDependencyId] : [],
-          updatedAt: now,
-        };
-        const dimensions = getBubbleDimensions(nextTodo);
-
-        return {
-          ...nextTodo,
-          x: clamp(nextTodo.x, 16, WORLD_WIDTH - dimensions.width - 16),
-          y: clamp(nextTodo.y, 16, WORLD_HEIGHT - dimensions.height - 16),
-        };
-      })
+      currentTodos.map((todo) =>
+        todo.id === editingTodo.id
+          ? {
+              ...todo,
+              title,
+              description: editDescription.trim(),
+              priority: editPriority,
+              heaviness: editHeaviness,
+              dependencyIds,
+              dueMode: undefined,
+              dueTime: undefined,
+              updatedAt: new Date().toISOString(),
+            }
+          : todo
+      )
     );
-    setTaskomonNotice(`Updated "${title}".`);
+    setTaskomonNotice(`Updated "${title}" in the workflow.`);
   }
 
   function handleDeleteEditedTodo() {
     if (!editingTodo) return;
 
     const deletedTitle = editingTodo.title;
-    const deletedId = editingTodo.id;
-    const now = new Date().toISOString();
-
     setTodos((currentTodos) =>
       currentTodos
-        .filter((todo) => todo.id !== deletedId)
-        .map((todo) => {
-          if (!todo.dependencyIds.includes(deletedId)) return todo;
-
-          return {
-            ...todo,
-            dependencyIds: todo.dependencyIds.filter(
-              (dependencyId) => dependencyId !== deletedId
-            ),
-            updatedAt: now,
-          };
-        })
+        .filter((todo) => todo.id !== editingTodo.id)
+        .map((todo) => ({
+          ...todo,
+          dependencyIds: todo.dependencyIds.filter((id) => id !== editingTodo.id),
+          updatedAt: new Date().toISOString(),
+        }))
     );
     setEditingTodoId("");
     setSelectedTodoId("");
     setTaskomonNotice(`Deleted "${deletedTitle}" and cleared its dependency lines.`);
+  }
+
+  function handleSetTimerPhase(phase: PomodoroPhase) {
+    setTimerPhase(phase);
+    setTimerSeconds(
+      phase === "focus" ? runtime.focusMinutes * 60 : runtime.restMinutes * 60
+    );
+    setTimerRunning(false);
+  }
+
+  function handleResetTimer() {
+    setTimerSeconds(
+      timerPhase === "focus" ? runtime.focusMinutes * 60 : runtime.restMinutes * 60
+    );
+    setTimerRunning(false);
+  }
+
+  function handleHoldWorkflow() {
+    setTimerRunning(false);
+    setRuntime((currentRuntime) => ({
+      ...currentRuntime,
+      status: "held",
+    }));
+    setTaskomonNotice("Workflow held. Your bubbles are stored for later.");
+  }
+
+  function handleResumeWorkflow() {
+    setRuntime((currentRuntime) => ({
+      ...currentRuntime,
+      status: "active",
+    }));
+    setTaskomonNotice("Workflow resumed. Start a bubble and I will watch the rhythm.");
+  }
+
+  function handleCompleteWorkflow() {
+    setTimerRunning(false);
+    setRuntime((currentRuntime) => ({
+      ...currentRuntime,
+      status: "completed",
+    }));
+    setTaskomonNotice("Workflow marked complete for this session.");
   }
 
   return (
@@ -1138,65 +1208,49 @@ function HabitWorkspacePage() {
           .clip-title {
             clip-path: polygon(0 0, 100% 0, 85% 100%, 0 100%);
           }
-
           .clip-hex {
             clip-path: polygon(6% 0, 94% 0, 100% 50%, 94% 100%, 6% 100%, 0 50%);
           }
-
           .canvas-grid {
             background-image:
-              radial-gradient(circle, rgba(255, 218, 150, 0.085) 1px, transparent 1px),
-              radial-gradient(circle at 26% 22%, rgba(255, 95, 40, 0.1), transparent 26%),
-              radial-gradient(circle at 78% 72%, rgba(251, 191, 36, 0.07), transparent 28%),
-              radial-gradient(circle at 44% 80%, rgba(244, 63, 94, 0.06), transparent 24%);
-            background-size: 34px 34px, 1100px 900px, 900px 900px, 1000px 800px;
+              linear-gradient(rgba(249, 115, 22, 0.08) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(249, 115, 22, 0.08) 1px, transparent 1px),
+              radial-gradient(circle at 30% 20%, rgba(244, 63, 94, 0.09), transparent 28%),
+              radial-gradient(circle at 72% 58%, rgba(251, 191, 36, 0.08), transparent 34%);
+            background-size: 64px 64px, 64px 64px, 100% 100%, 100% 100%;
           }
-
           @keyframes bubbleIdle {
-            0%, 100% {
-              translate: 0 0;
-            }
-            50% {
-              translate: 0 -4px;
-            }
+            0%, 100% { translate: 0 0; }
+            50% { translate: 0 -6px; }
           }
-
           .bubble-idle {
-            animation: bubbleIdle 3.4s ease-in-out infinite;
+            animation: bubbleIdle 4s ease-in-out infinite;
           }
-
           @keyframes finishPop {
-            0% { opacity: 0; transform: translate(-50%, 14px) scale(0.96); }
-            14% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-            78% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-            100% { opacity: 0; transform: translate(-50%, -8px) scale(0.98); }
+            0% { transform: translate(-50%, 10px) scale(0.92); opacity: 0; }
+            18% { transform: translate(-50%, 0) scale(1.03); opacity: 1; }
+            72% { transform: translate(-50%, -4px) scale(1); opacity: 1; }
+            100% { transform: translate(-50%, -10px) scale(0.96); opacity: 0; }
           }
-
           .finish-pop {
             animation: finishPop 2.4s ease forwards;
           }
-
           .workspace-scrollbar::-webkit-scrollbar {
             width: 9px;
             height: 9px;
           }
-
           .workspace-scrollbar::-webkit-scrollbar-track {
-            background: #120d0c;
+            background: #100c0b;
           }
-
           .workspace-scrollbar::-webkit-scrollbar-thumb {
-            background: #5a3328;
+            background: #42231b;
             border-radius: 999px;
           }
-
           .workspace-scrollbar::-webkit-scrollbar-thumb:hover {
             background: #f97316;
           }
         `}
       </style>
-
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_12%,rgba(220,38,38,0.14),transparent_30%),radial-gradient(circle_at_44%_10%,rgba(249,115,22,0.13),transparent_32%),radial-gradient(circle_at_82%_16%,rgba(251,191,36,0.1),transparent_28%),radial-gradient(circle_at_72%_86%,rgba(251,146,60,0.1),transparent_34%)]" />
 
       <div className="relative z-10 grid h-screen grid-cols-[230px_1fr]">
         <aside className="relative flex h-screen flex-col justify-between border-r border-orange-950/60 bg-gradient-to-b from-[#21110e] via-[#17100f] to-[#100c0b] p-4 pt-0">
@@ -1205,7 +1259,7 @@ function HabitWorkspacePage() {
               <div className="clip-title absolute inset-0 bg-gradient-to-r from-red-600 via-orange-500 to-amber-300" />
               <div className="clip-title absolute inset-[0_0_2px_0] flex items-center bg-[#3a1710] pl-5">
                 <h1 className="text-sm font-black uppercase tracking-widest text-white">
-                  Habit
+                  Workflow
                 </h1>
               </div>
             </div>
@@ -1239,236 +1293,276 @@ function HabitWorkspacePage() {
                   className="h-full w-full object-cover"
                 />
               </div>
-
               <div>
                 <p className="text-sm font-bold text-orange-50">Syamil</p>
-                <p className="text-[11px] text-amber-300/80">
-                  Habit workspace
-                </p>
+                <p className="text-[11px] text-amber-300/80">Workflow shell</p>
               </div>
             </div>
           </div>
         </aside>
 
-        <section className="grid h-screen grid-rows-[76px_1fr] overflow-hidden">
-          <header className="border-b border-orange-950/60 bg-gradient-to-r from-[#40160f] via-[#3a1d10] to-[#2b2011] px-6 py-3">
+        <section className="grid h-screen grid-rows-[76px_auto_1fr] overflow-hidden">
+          <header className="border-b border-orange-950/60 bg-gradient-to-r from-[#40160f] via-[#3a1d10] to-[#2b2011] px-8 py-3">
             <div className="flex h-full items-center justify-between gap-5">
               <div className="min-w-0">
                 <p className="text-[11px] font-black uppercase tracking-[0.24em] text-amber-300">
-                  Habit Space
+                  Workflow workspace
                 </p>
-                <h2 className="mt-1 truncate text-xl font-black tracking-tight text-white">
-                  {habit.title}
+                <h2 className="truncate text-lg font-black tracking-tight text-white">
+                  {workflow.title}
                 </h2>
-                <p className="truncate text-xs text-orange-100/55">
-                  {habit.description}
+                <p className="truncate text-xs font-semibold text-orange-100/45">
+                  {workflow.description}
                 </p>
               </div>
 
-              <div className="flex shrink-0 items-center gap-2">
-                <div className="rounded-2xl border border-amber-300/20 bg-amber-500/10 px-3 py-2">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-amber-100/55">
-                    Mode
+              <div className="flex shrink-0 items-center gap-3">
+                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-1.5 text-right">
+                  <p className="text-[9px] font-black uppercase tracking-wider text-emerald-100/45">
+                    Progress
                   </p>
-                  <p className="text-sm font-black capitalize text-amber-200">
-                    {habit.mode.replace("_", " ")}
+                  <p className="text-sm font-black text-emerald-100">
+                    {completionPercentage}%
                   </p>
                 </div>
-
-                <div className="rounded-2xl border border-orange-300/20 bg-orange-500/10 px-3 py-2">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-orange-100/55">
-                    Reset
+                <div className="rounded-2xl border border-orange-300/15 bg-orange-500/10 px-4 py-1.5 text-right">
+                  <p className="text-[9px] font-black uppercase tracking-wider text-orange-100/45">
+                    Status
                   </p>
                   <p className="text-sm font-black capitalize text-orange-100">
-                    {habit.resetFrequency}
+                    {runtime.status}
                   </p>
-                </div>
-
-                <div className="max-w-36 rounded-2xl border border-sky-300/20 bg-sky-500/10 px-3 py-2">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-sky-100/55">
-                    Next due
-                  </p>
-                  <p className="truncate text-sm font-black text-sky-100">
-                    {nextDueTodo ? getDueLabel(nextDueTodo) : "Clear"}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-red-300/20 bg-red-500/10 px-3 py-2">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-red-100/55">
-                    Notice
-                  </p>
-                  <p className="text-sm font-black text-red-100">
-                    {habit.noticeEnabled ? "On" : "Off"}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-emerald-300/20 bg-emerald-500/10 px-3 py-2">
-                  <p className="text-[10px] font-black uppercase tracking-wider text-emerald-100/55">
-                    Today
-                  </p>
-                  <p className="text-sm font-black text-emerald-200">
-                    {completedCount}/{todos.length}
-                  </p>
-                </div>
-
-                <div className="w-32 rounded-2xl border border-orange-300/20 bg-orange-500/10 px-3 py-2">
-                  <div className="mb-1 flex justify-between text-[10px] font-bold text-orange-100/55">
-                    <span>Done</span>
-                    <span>{completionPercentage}%</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-[#321b13]">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-red-500 via-orange-400 to-amber-200"
-                      style={{ width: `${completionPercentage}%` }}
-                    />
-                  </div>
                 </div>
               </div>
             </div>
           </header>
 
-          <section className="relative min-h-0 overflow-hidden bg-[#140f0e]">
-            <div className="absolute left-5 top-5 z-20 flex max-w-[calc(100%-40px)] flex-wrap items-center gap-2 rounded-2xl border border-orange-400/25 bg-[#201411]/92 p-2 shadow-[0_14px_50px_rgba(0,0,0,0.32)] backdrop-blur">
-              <input
-                value={newTodoTitle}
-                onChange={(event) => setNewTodoTitle(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") handleAddTodo();
-                }}
-                placeholder="New bubble..."
-                className="w-44 rounded-xl border border-orange-400/20 bg-[#120c0b] px-3 py-2 text-sm text-neutral-100 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
-              />
+          <div className="flex flex-wrap items-center gap-2 border-b border-orange-950/50 bg-[#1a100e] px-6 py-3">
+            <input
+              value={newTodoTitle}
+              onChange={(event) => setNewTodoTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleAddTodo();
+              }}
+              placeholder="New Bubble..."
+              className="w-48 rounded-xl border border-orange-400/20 bg-[#120c0b] px-3 py-2 text-sm text-neutral-100 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
+            />
 
-              <select
-                value={newTodoDueMode}
-                onChange={(event) => setNewTodoDueMode(event.target.value as DueMode)}
-                className="w-28 rounded-xl border border-sky-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold text-neutral-200 outline-none focus:border-sky-300/60"
-              >
-                <option value="anytime">Anytime</option>
-                <option value="by_time">By time</option>
-                <option value="at_time">At time</option>
-              </select>
+            <select
+              value={newTodoPriority}
+              onChange={(event) => setNewTodoPriority(event.target.value as Priority)}
+              className="w-28 rounded-xl border border-violet-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold capitalize text-neutral-200 outline-none focus:border-violet-300/60"
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
 
-              {newTodoDueMode !== "anytime" && (
-                <input
-                  type="time"
-                  value={newTodoDueTime}
-                  onChange={(event) => setNewTodoDueTime(event.target.value)}
-                  className="w-28 rounded-xl border border-sky-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold text-neutral-200 outline-none focus:border-sky-300/60"
-                />
-              )}
+            <select
+              value={newTodoHeaviness}
+              onChange={(event) =>
+                setNewTodoHeaviness(event.target.value as Heaviness)
+              }
+              className="w-28 rounded-xl border border-violet-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold capitalize text-neutral-200 outline-none focus:border-violet-300/60"
+            >
+              <option value="light">Light</option>
+              <option value="medium">Medium</option>
+              <option value="heavy">Heavy</option>
+            </select>
 
-              <select
-                value={newTodoPriority}
-                onChange={(event) => setNewTodoPriority(event.target.value as Priority)}
-                className="w-28 rounded-xl border border-violet-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold capitalize text-neutral-200 outline-none focus:border-violet-300/60"
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
+            <select
+              value={newTodoDependencyId}
+              onChange={(event) => setNewTodoDependencyId(event.target.value)}
+              className="w-40 rounded-xl border border-red-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold text-neutral-200 outline-none focus:border-red-300/60"
+            >
+              <option value="">No dependency</option>
+              {todos.map((todo) => (
+                <option key={todo.id} value={todo.id}>
+                  After {todo.title}
+                </option>
+              ))}
+            </select>
 
-              <select
-                value={newTodoHeaviness}
-                onChange={(event) => setNewTodoHeaviness(event.target.value as Heaviness)}
-                className="w-28 rounded-xl border border-violet-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold capitalize text-neutral-200 outline-none focus:border-violet-300/60"
-              >
-                <option value="light">Light</option>
-                <option value="medium">Medium</option>
-                <option value="heavy">Heavy</option>
-              </select>
+            <button
+              onClick={handleAddTodo}
+              className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-sm font-black text-white transition hover:brightness-110"
+            >
+              Add
+            </button>
 
-              <select
-                value={newTodoDependencyId}
-                onChange={(event) => setNewTodoDependencyId(event.target.value)}
-                className="w-40 rounded-xl border border-red-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold text-neutral-200 outline-none focus:border-red-300/60"
-              >
-                <option value="">No dependency</option>
-                {todos.map((todo) => (
-                  <option key={todo.id} value={todo.id}>
-                    After {todo.title}
-                  </option>
-                ))}
-              </select>
+            <div className="h-7 w-px bg-orange-400/20" />
 
-              <button
-                onClick={handleAddTodo}
-                className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-sm font-black text-white transition hover:brightness-110"
-              >
-                Add
-              </button>
-
-              <div className="h-7 w-px bg-orange-400/20" />
-
-              <select
-                value={
-                  todos.some((todo) => todo.id === selectedTodoId)
-                    ? selectedTodoId
-                    : ""
+            <select
+              value={
+                todos.some((todo) => todo.id === selectedTodoId)
+                  ? selectedTodoId
+                  : ""
+              }
+              onChange={(event) => {
+                if (event.target.value) {
+                  openTodoEditor(event.target.value);
+                  return;
                 }
-                onChange={(event) => {
-                  if (event.target.value) {
-                    openTodoEditor(event.target.value);
-                    return;
+
+                setSelectedTodoId("");
+                setEditingTodoId("");
+              }}
+              className="w-40 rounded-xl border border-orange-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold text-neutral-200 outline-none focus:border-orange-300/60"
+            >
+              <option value="">Find todo...</option>
+              {todos.map((todo) => (
+                <option key={todo.id} value={todo.id}>
+                  {todo.title}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => {
+                if (selectedTodoId) scrollToTodo(selectedTodoId);
+              }}
+              className="rounded-xl border border-amber-300/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100 transition hover:bg-amber-500/20"
+            >
+              Go
+            </button>
+            <button
+              onClick={scrollToActiveTodo}
+              className="rounded-xl border border-orange-300/25 bg-orange-500/10 px-3 py-2 text-xs font-bold text-orange-100 transition hover:bg-orange-500/20"
+            >
+              Active
+            </button>
+            <button
+              onClick={scrollToAllBubbles}
+              className="rounded-xl border border-red-300/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100 transition hover:bg-red-500/20"
+            >
+              Show all
+            </button>
+          </div>
+
+          <section className="relative min-h-0 overflow-hidden bg-[#140f0e]">
+            <div className="absolute right-5 top-5 z-40 w-80 rounded-2xl border border-orange-300/25 bg-[#15100f]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
+                    Rest clock
+                  </p>
+                  <p className="mt-1 text-4xl font-black tracking-tight text-white">
+                    {formatClock(timerState.remainingSeconds)}
+                  </p>
+                </div>
+                <span
+                  className={[
+                    "rounded-full border px-3 py-1 text-[10px] font-black uppercase",
+                    timerState.phase === "focus"
+                      ? "border-orange-300/30 bg-orange-500/10 text-orange-100"
+                      : "border-sky-300/30 bg-sky-500/10 text-sky-100",
+                  ].join(" ")}
+                >
+                  {timerState.phase}
+                </span>
+              </div>
+
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#321b13]">
+                <div
+                  className={[
+                    "h-full rounded-full transition-all duration-300",
+                    timerState.phase === "focus"
+                      ? "bg-gradient-to-r from-red-500 via-orange-400 to-amber-200"
+                      : "bg-gradient-to-r from-sky-500 via-cyan-300 to-emerald-200",
+                  ].join(" ")}
+                  style={{ width: `${timerProgress}%` }}
+                />
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleSetTimerPhase("focus")}
+                  className={[
+                    "rounded-xl border px-3 py-2 text-xs font-black uppercase transition",
+                    timerState.phase === "focus"
+                      ? "border-orange-200/45 bg-orange-400/18 text-orange-50"
+                      : "border-orange-300/20 bg-orange-500/10 text-orange-100/60 hover:bg-orange-500/20",
+                  ].join(" ")}
+                >
+                  Focus
+                </button>
+                <button
+                  onClick={() => handleSetTimerPhase("rest")}
+                  className={[
+                    "rounded-xl border px-3 py-2 text-xs font-black uppercase transition",
+                    timerState.phase === "rest"
+                      ? "border-sky-200/45 bg-sky-400/18 text-sky-50"
+                      : "border-sky-300/20 bg-sky-500/10 text-sky-100/60 hover:bg-sky-500/20",
+                  ].join(" ")}
+                >
+                  Rest
+                </button>
+              </div>
+
+              <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-2">
+                <button
+                  onClick={() => setTimerRunning((running) => !running)}
+                  disabled={runtime.status === "held" || runtime.status === "completed"}
+                  className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black uppercase text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {timerState.running ? "Pause" : "Start"}
+                </button>
+                <button
+                  onClick={handleResetTimer}
+                  className="rounded-xl border border-orange-300/25 bg-orange-500/10 px-3 py-2 text-xs font-black uppercase text-orange-100 transition hover:bg-orange-500/20"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={
+                    timerState.phase === "focus"
+                      ? () => handleSetTimerPhase("rest")
+                      : () => handleSetTimerPhase("focus")
                   }
+                  className="rounded-xl border border-sky-300/25 bg-sky-500/10 px-3 py-2 text-xs font-black uppercase text-sky-100 transition hover:bg-sky-500/20"
+                >
+                  Skip
+                </button>
+              </div>
 
-                  setSelectedTodoId("");
-                  setEditingTodoId("");
-                }}
-                className="w-40 rounded-xl border border-orange-400/20 bg-[#120c0b] px-3 py-2 text-xs font-semibold text-neutral-200 outline-none focus:border-orange-300/60"
-              >
-                <option value="">Find todo...</option>
-                {todos.map((todo) => (
-                  <option key={todo.id} value={todo.id}>
-                    {todo.title}
-                  </option>
-                ))}
-              </select>
-
-              <button
-                onClick={() => {
-                  if (selectedTodoId) scrollToTodo(selectedTodoId);
-                }}
-                className="rounded-xl border border-amber-300/30 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-100 transition hover:bg-amber-500/20"
-              >
-                Go
-              </button>
-
-              <button
-                onClick={scrollToActiveTodo}
-                className="rounded-xl border border-orange-300/25 bg-orange-500/10 px-3 py-2 text-xs font-bold text-orange-100 transition hover:bg-orange-500/20"
-              >
-                Active
-              </button>
-
-              <button
-                onClick={scrollToAllBubbles}
-                className="rounded-xl border border-red-300/25 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100 transition hover:bg-red-500/20"
-              >
-                Show all
-              </button>
-
-              <button
-                onClick={handleResetHabitDay}
-                className="rounded-xl border border-emerald-300/25 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-100 transition hover:bg-emerald-500/20"
-              >
-                Reset cycle
-              </button>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {runtime.status === "held" ? (
+                  <button
+                    onClick={handleResumeWorkflow}
+                    className="rounded-xl border border-emerald-300/25 bg-emerald-500/10 px-3 py-2 text-xs font-black uppercase text-emerald-100 transition hover:bg-emerald-500/20"
+                  >
+                    Resume
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleHoldWorkflow}
+                    className="rounded-xl border border-amber-300/25 bg-amber-500/10 px-3 py-2 text-xs font-black uppercase text-amber-100 transition hover:bg-amber-500/20"
+                  >
+                    Hold
+                  </button>
+                )}
+                <button
+                  onClick={handleCompleteWorkflow}
+                  className="rounded-xl border border-emerald-300/25 bg-emerald-500/10 px-3 py-2 text-xs font-black uppercase text-emerald-100 transition hover:bg-emerald-500/20"
+                >
+                  Complete
+                </button>
+              </div>
             </div>
 
             {editingTodo && (
               <div
                 ref={editorRef}
-                data-testid="todo-editor"
+                data-testid="workflow-todo-editor"
                 style={
                   editorPosition
                     ? { left: editorPosition.left, top: editorPosition.top }
-                    : { right: 20, top: 112 }
+                    : { right: 20, top: 354 }
                 }
-                className="absolute z-30 w-80 rounded-2xl border border-sky-300/25 bg-[#111923]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.4)] backdrop-blur"
+                className="absolute z-40 w-80 rounded-2xl border border-sky-300/25 bg-[#111923]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.4)] backdrop-blur"
               >
                 <div
-                  data-testid="todo-editor-drag-handle"
+                  data-testid="workflow-todo-editor-drag-handle"
                   onPointerDown={handleEditorDragStart}
                   onPointerMove={handleEditorDragMove}
                   onPointerUp={handleEditorDragEnd}
@@ -1476,7 +1570,7 @@ function HabitWorkspacePage() {
                   className="mb-3 flex cursor-grab select-none items-center justify-between gap-3 active:cursor-grabbing"
                 >
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-sky-200">
-                    Todo editor
+                    Workflow todo
                   </p>
                   <button
                     onPointerDown={(event) => event.stopPropagation()}
@@ -1491,7 +1585,7 @@ function HabitWorkspacePage() {
                   <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
                     Title
                     <input
-                      data-testid="todo-editor-title"
+                      data-testid="workflow-todo-editor-title"
                       value={editTitle}
                       onChange={(event) => setEditTitle(event.target.value)}
                       className="rounded-xl border border-sky-300/20 bg-[#0b1118] px-3 py-2 text-sm font-semibold normal-case tracking-normal text-sky-50 outline-none focus:border-sky-300/60"
@@ -1501,7 +1595,7 @@ function HabitWorkspacePage() {
                   <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
                     Description
                     <textarea
-                      data-testid="todo-editor-description"
+                      data-testid="workflow-todo-editor-description"
                       value={editDescription}
                       onChange={(event) => setEditDescription(event.target.value)}
                       rows={3}
@@ -1511,39 +1605,9 @@ function HabitWorkspacePage() {
 
                   <div className="grid grid-cols-2 gap-2">
                     <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
-                      Due
-                      <select
-                        data-testid="todo-editor-due-mode"
-                        value={editDueMode}
-                        onChange={(event) =>
-                          setEditDueMode(event.target.value as DueMode)
-                        }
-                        className="rounded-xl border border-sky-300/20 bg-[#0b1118] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-sky-50 outline-none focus:border-sky-300/60"
-                      >
-                        <option value="anytime">Anytime</option>
-                        <option value="by_time">By time</option>
-                        <option value="at_time">At time</option>
-                      </select>
-                    </label>
-
-                    <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
-                      Time
-                      <input
-                        data-testid="todo-editor-due-time"
-                        type="time"
-                        value={editDueTime}
-                        disabled={editDueMode === "anytime"}
-                        onChange={(event) => setEditDueTime(event.target.value)}
-                        className="rounded-xl border border-sky-300/20 bg-[#0b1118] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-sky-50 outline-none disabled:opacity-35 focus:border-sky-300/60"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
                       Priority
                       <select
-                        data-testid="todo-editor-priority"
+                        data-testid="workflow-todo-editor-priority"
                         value={editPriority}
                         onChange={(event) =>
                           setEditPriority(event.target.value as Priority)
@@ -1559,7 +1623,7 @@ function HabitWorkspacePage() {
                     <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
                       Weight
                       <select
-                        data-testid="todo-editor-heaviness"
+                        data-testid="workflow-todo-editor-heaviness"
                         value={editHeaviness}
                         onChange={(event) =>
                           setEditHeaviness(event.target.value as Heaviness)
@@ -1576,7 +1640,7 @@ function HabitWorkspacePage() {
                   <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-sky-100/55">
                     Dependency
                     <select
-                      data-testid="todo-editor-dependency"
+                      data-testid="workflow-todo-editor-dependency"
                       value={editDependencyId}
                       onChange={(event) => setEditDependencyId(event.target.value)}
                       className="rounded-xl border border-sky-300/20 bg-[#0b1118] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-sky-50 outline-none focus:border-sky-300/60"
@@ -1594,14 +1658,14 @@ function HabitWorkspacePage() {
 
                   <div className="mt-1 grid grid-cols-[1fr_auto] gap-2">
                     <button
-                      data-testid="todo-editor-save"
+                      data-testid="workflow-todo-editor-save"
                       onClick={handleSaveEditedTodo}
                       className="rounded-xl bg-gradient-to-r from-sky-500 to-cyan-300 px-4 py-2 text-xs font-black uppercase text-slate-950 transition hover:brightness-110"
                     >
                       Save changes
                     </button>
                     <button
-                      data-testid="todo-editor-delete"
+                      data-testid="workflow-todo-editor-delete"
                       onClick={handleDeleteEditedTodo}
                       className="rounded-xl border border-red-300/30 bg-red-500/10 px-4 py-2 text-xs font-black uppercase text-red-100 transition hover:bg-red-500/20"
                     >
@@ -1639,7 +1703,7 @@ function HabitWorkspacePage() {
                 >
                   <defs>
                     <linearGradient
-                      id="dependencyLine"
+                      id="workflowDependencyLine"
                       x1="0"
                       y1="0"
                       x2="1"
@@ -1650,7 +1714,7 @@ function HabitWorkspacePage() {
                       <stop offset="100%" stopColor="rgba(251,191,36,0.5)" />
                     </linearGradient>
                     <marker
-                      id="dependencyArrow"
+                      id="workflowDependencyArrow"
                       markerHeight="8"
                       markerWidth="8"
                       orient="auto"
@@ -1668,22 +1732,20 @@ function HabitWorkspacePage() {
                       y1={line.y1}
                       x2={line.x2}
                       y2={line.y2}
-                      stroke="url(#dependencyLine)"
+                      stroke="url(#workflowDependencyLine)"
                       strokeWidth="2"
                       strokeDasharray="6 8"
-                      markerEnd="url(#dependencyArrow)"
+                      markerEnd="url(#workflowDependencyArrow)"
                     />
                   ))}
                 </svg>
 
                 {todos.map((todo) => (
-                  <HabitBubble
+                  <WorkflowBubble
                     key={todo.id}
                     todo={todo}
                     isDragging={dragState?.todoId === todo.id}
                     isBlocked={isTodoBlocked(todo, todos)}
-                    isLate={isTodoLate(todo)}
-                    isSoon={isTodoSoon(todo)}
                     onStartDrag={handleStartDrag}
                     onCycleStatus={handleCycleStatus}
                     onEditTodo={openTodoEditor}
@@ -1694,10 +1756,10 @@ function HabitWorkspacePage() {
                   <div className="absolute inset-0 grid place-items-center text-center">
                     <div>
                       <p className="text-lg font-black text-neutral-200">
-                        Empty habit space
+                        Empty workflow space
                       </p>
                       <p className="mt-1 text-sm text-neutral-500">
-                        Add your first todo bubble to start tracking this habit.
+                        Add a workflow bubble to begin the session.
                       </p>
                     </div>
                   </div>
@@ -1707,7 +1769,7 @@ function HabitWorkspacePage() {
 
             <div className="pointer-events-none absolute bottom-6 left-6 z-30 w-72 rounded-2xl border border-sky-300/20 bg-[#10161d]/92 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur">
               <p className="text-[10px] font-black uppercase tracking-[0.2em] text-sky-200">
-                Habit report
+                Workflow report
               </p>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-xl border border-emerald-300/15 bg-emerald-500/10 p-2">
@@ -1718,10 +1780,12 @@ function HabitWorkspacePage() {
                     Done
                   </p>
                 </div>
-                <div className="rounded-xl border border-rose-300/15 bg-rose-500/10 p-2">
-                  <p className="text-base font-black text-rose-200">{lateTodos.length}</p>
-                  <p className="text-[9px] font-bold uppercase text-rose-100/50">
-                    Late
+                <div className="rounded-xl border border-fuchsia-300/15 bg-fuchsia-500/10 p-2">
+                  <p className="text-base font-black text-fuchsia-200">
+                    {heavyOpenTodos.length}
+                  </p>
+                  <p className="text-[9px] font-bold uppercase text-fuchsia-100/50">
+                    Heavy
                   </p>
                 </div>
                 <div className="rounded-xl border border-amber-300/15 bg-amber-500/10 p-2">
@@ -1734,9 +1798,9 @@ function HabitWorkspacePage() {
                 </div>
               </div>
               <p className="mt-3 truncate text-xs font-semibold text-sky-50/70">
-                {nextDueTodo
-                  ? `Next: ${nextDueTodo.title} (${getDueLabel(nextDueTodo)})`
-                  : "No timed bubbles left today"}
+                {activeTodo
+                  ? `Active: ${activeTodo.title}`
+                  : "No active bubble selected"}
               </p>
             </div>
 
@@ -1749,16 +1813,13 @@ function HabitWorkspacePage() {
             <div className="pointer-events-none absolute bottom-6 right-6 z-30 flex max-w-[430px] items-end gap-3">
               <div className="relative rounded-3xl border border-orange-300/25 bg-gradient-to-br from-[#3b180f]/95 via-[#28130e]/95 to-[#1b100d]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.38)] backdrop-blur">
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
-                  Taskomon says
+                  Taskomon
                 </p>
-                <p className="mt-1 text-sm font-bold leading-relaxed text-orange-50">
+                <p className="mt-1 max-w-xs text-sm font-bold leading-snug text-orange-50">
                   {taskomonThought}
                 </p>
-
-                <div className="absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t border-orange-300/25 bg-[#22110d]" />
               </div>
-
-              <div className="h-28 w-28 shrink-0 overflow-hidden rounded-full border border-orange-300/30 bg-orange-500/10 shadow-[0_0_35px_rgba(249,115,22,0.22)]">
+              <div className="grid h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-3xl border border-orange-300/30 bg-orange-500/10 shadow-[0_0_40px_rgba(249,115,22,0.24)]">
                 <img
                   src={taskomonImage}
                   alt="Taskomon"
@@ -1773,4 +1834,4 @@ function HabitWorkspacePage() {
   );
 }
 
-export default HabitWorkspacePage;
+export default WorkflowWorkspacePage;
