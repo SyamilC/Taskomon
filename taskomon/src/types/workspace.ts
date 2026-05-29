@@ -21,7 +21,9 @@ export interface Workflow extends Workspace {
 export interface Habit extends Workspace {
   type: "habit";
   mode: "one_time" | "build_habit";
-  resetFrequency: "daily" | "weekly";
+  resetFrequency: "daily" | "weekly" | "monthly";
   resetTime?: string;
   noticeEnabled: boolean;
+  status?: "active" | "archived";
+  archivedAt?: string;
 }

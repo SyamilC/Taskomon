@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoHabits, demoTodos } from "../data/demoData";
+import { demoTodos } from "../data/demoData";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
-import type { DueMode, Heaviness, Priority, Todo, TodoStatus } from "../types";
+import {
+  applyHabitAutoReset,
+  getStoredHabits,
+  saveStoredHabits,
+} from "../services/workspaceStorage";
+import type { DueMode, Habit, Heaviness, Priority, Todo, TodoStatus } from "../types";
+import NavBar from "./NavBar";
 
 type DragState = {
   todoId: string;
@@ -240,11 +246,12 @@ function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
   });
 }
 
-function getHabitAttentionScore(habitId: string) {
-  const todos = loadFromStorage<Todo[]>(
-    getHabitTodoStorageKey(habitId),
-    getInitialHabitTodos(habitId)
+function getHabitAttentionScore(habit: Habit) {
+  const storedTodos = loadFromStorage<Todo[]>(
+    getHabitTodoStorageKey(habit.id),
+    getInitialHabitTodos(habit.id)
   );
+  const todos = applyHabitAutoReset(habit, storedTodos);
   const lateCount = todos.filter(isTodoLate).length;
   const blockedCount = todos.filter((todo) => isTodoBlocked(todo, todos)).length;
   const dueSoonCount = todos.filter(isTodoSoon).length;
@@ -264,26 +271,26 @@ function getHabitAttentionScore(habitId: string) {
   );
 }
 
-function getMostAttentionHabitId() {
-  return [...demoHabits].sort(
-    (a, b) => getHabitAttentionScore(b.id) - getHabitAttentionScore(a.id)
+function getMostAttentionHabitId(habits: Habit[]) {
+  return [...habits].sort(
+    (a, b) => getHabitAttentionScore(b) - getHabitAttentionScore(a)
   )[0]?.id;
 }
 
-function getHabitRouteTarget(routeHabitId?: string) {
-  if (routeHabitId && demoHabits.some((habit) => habit.id === routeHabitId)) {
+function getHabitRouteTarget(habits: Habit[], routeHabitId?: string) {
+  if (routeHabitId && habits.some((habit) => habit.id === routeHabitId)) {
     return routeHabitId;
   }
 
   const lastOpenedHabitId = sessionStorage.getItem(LAST_OPENED_HABIT_KEY);
   if (
     lastOpenedHabitId &&
-    demoHabits.some((habit) => habit.id === lastOpenedHabitId)
+    habits.some((habit) => habit.id === lastOpenedHabitId)
   ) {
     return lastOpenedHabitId;
   }
 
-  return getMostAttentionHabitId() ?? demoHabits[0]?.id;
+  return getMostAttentionHabitId(habits) ?? habits[0]?.id;
 }
 
 function wouldCreateDependencyCycle(
@@ -344,30 +351,6 @@ function getBubbleTheme(status: TodoStatus) {
     glow: "bg-rose-300/16",
     label: "text-rose-50/80 border-rose-200/30 bg-rose-400/12",
   };
-}
-
-function NavButton({
-  active,
-  label,
-  to,
-}: {
-  active?: boolean;
-  label: string;
-  to: string;
-}) {
-  return (
-    <Link
-      to={to}
-      className={[
-        "clip-hex grid h-11 place-items-center text-sm font-bold transition",
-        active
-          ? "bg-gradient-to-r from-red-500 via-orange-500 to-amber-400 text-white shadow-[0_0_18px_rgba(249,115,22,0.28)]"
-          : "bg-[#251713] text-orange-100/45 hover:bg-[#321b15] hover:text-orange-100/75",
-      ].join(" ")}
-    >
-      {label}
-    </Link>
-  );
 }
 
 function HabitBubble({
@@ -514,15 +497,21 @@ function HabitBubble({
 }
 
 function HabitWorkspacePage() {
-  const location = useLocation();
   const navigate = useNavigate();
   const { habitId: routeHabitId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const activeHabitId = getHabitRouteTarget(routeHabitId) ?? demoHabits[0].id;
+  const [habitList, setHabitList] = useState(() => getStoredHabits());
+  const availableHabits = habitList.filter((habit) => habit.status !== "archived");
+  const activeHabitId =
+    getHabitRouteTarget(availableHabits, routeHabitId) ??
+    availableHabits[0]?.id ??
+    habitList[0]?.id;
   const habit =
-    demoHabits.find((habitItem) => habitItem.id === activeHabitId) ?? demoHabits[0];
+    habitList.find((habitItem) => habitItem.id === activeHabitId) ??
+    availableHabits[0] ??
+    habitList[0];
   const habitStorageKey = getHabitTodoStorageKey(habit.id);
 
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -558,12 +547,12 @@ function HabitWorkspacePage() {
     items: Todo[];
   }>(() => ({
     habitId: habit.id,
-    items: loadFromStorage(habitStorageKey, getInitialHabitTodos(habit.id)),
+    items: loadHabitTodos(habit),
   }));
   const todos =
     todoState.habitId === habit.id
       ? todoState.items
-      : loadFromStorage(habitStorageKey, getInitialHabitTodos(habit.id));
+      : loadHabitTodos(habit);
   const taskomonNotice =
     taskomonNoticeState.habitId === habit.id
       ? taskomonNoticeState.message
@@ -575,12 +564,27 @@ function HabitWorkspacePage() {
     setTaskomonNoticeState({ habitId: habit.id, message });
   }
 
+  function loadHabitTodos(currentHabit: Habit) {
+    const storageKey = getHabitTodoStorageKey(currentHabit.id);
+    const storedTodos = loadFromStorage(
+      storageKey,
+      getInitialHabitTodos(currentHabit.id)
+    );
+    const resetTodos = applyHabitAutoReset(currentHabit, storedTodos);
+
+    if (resetTodos !== storedTodos) {
+      saveToStorage(storageKey, resetTodos);
+    }
+
+    return resetTodos;
+  }
+
   function setTodos(updater: Todo[] | ((currentTodos: Todo[]) => Todo[])) {
     setTodoState((currentState) => {
       const currentTodos =
         currentState.habitId === habit.id
           ? currentState.items
-          : loadFromStorage(habitStorageKey, getInitialHabitTodos(habit.id));
+          : loadHabitTodos(habit);
       const nextItems =
         typeof updater === "function" ? updater(currentTodos) : updater;
 
@@ -1034,6 +1038,40 @@ function HabitWorkspacePage() {
     setTaskomonNotice("Habit bubbles reset for the next check cycle.");
   }
 
+  function handleCompleteHabit() {
+    const now = new Date().toISOString();
+
+    setTodos((currentTodos) =>
+      currentTodos.map((todo) => ({
+        ...todo,
+        status: "done",
+        completedAt: todo.completedAt ?? now,
+        updatedAt: now,
+      }))
+    );
+
+    if (habit.mode === "one_time") {
+      const nextHabits = habitList.map((habitItem) =>
+        habitItem.id === habit.id
+          ? {
+              ...habitItem,
+              status: "archived" as const,
+              archivedAt: now,
+              updatedAt: now,
+            }
+          : habitItem
+      );
+
+      setHabitList(nextHabits);
+      saveStoredHabits(nextHabits);
+      setTaskomonNotice("One-time habit completed and archived.");
+      window.setTimeout(() => navigate("/dashboard"), 700);
+      return;
+    }
+
+    setTaskomonNotice("Habit marked complete for this cycle.");
+  }
+
   function openTodoEditor(todoId: string) {
     const todo = todos.find((item) => item.id === todoId);
     if (!todo) {
@@ -1210,24 +1248,7 @@ function HabitWorkspacePage() {
               </div>
             </div>
 
-            <nav className="mt-20 flex flex-col gap-3 px-1">
-              <NavButton
-                active={location.pathname === "/dashboard"}
-                label="Notice"
-                to="/dashboard"
-              />
-              <NavButton
-                active={location.pathname.startsWith("/habit")}
-                label="Habit"
-                to="/habit"
-              />
-              <NavButton
-                active={location.pathname.startsWith("/workflow")}
-                label="Workflow"
-                to="/workflow"
-              />
-              <NavButton label="Advice" to="/dashboard" />
-            </nav>
+            <NavBar />
           </div>
 
           <div className="rounded-2xl border border-orange-500/20 bg-orange-950/20 p-3">
@@ -1453,6 +1474,13 @@ function HabitWorkspacePage() {
                 className="rounded-xl border border-emerald-300/25 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-100 transition hover:bg-emerald-500/20"
               >
                 Reset cycle
+              </button>
+
+              <button
+                onClick={handleCompleteHabit}
+                className="rounded-xl border border-sky-300/25 bg-sky-500/10 px-3 py-2 text-xs font-bold text-sky-100 transition hover:bg-sky-500/20"
+              >
+                Complete habit
               </button>
             </div>
 
@@ -1749,7 +1777,7 @@ function HabitWorkspacePage() {
             <div className="pointer-events-none absolute bottom-6 right-6 z-30 flex max-w-[430px] items-end gap-3">
               <div className="relative rounded-3xl border border-orange-300/25 bg-gradient-to-br from-[#3b180f]/95 via-[#28130e]/95 to-[#1b100d]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.38)] backdrop-blur">
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
-                  Taskomon says
+                  Taskomon
                 </p>
                 <p className="mt-1 text-sm font-bold leading-relaxed text-orange-50">
                   {taskomonThought}

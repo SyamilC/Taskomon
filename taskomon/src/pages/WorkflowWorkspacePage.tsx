@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoTodos, demoWorkflows } from "../data/demoData";
+import { demoTodos } from "../data/demoData";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
+import { getStoredWorkflows } from "../services/workspaceStorage";
 import type {
   Heaviness,
   PomodoroPhase,
@@ -13,6 +14,7 @@ import type {
   TodoStatus,
   Workflow,
 } from "../types";
+import NavBar from "./NavBar";
 
 type DragState = {
   todoId: string;
@@ -304,10 +306,10 @@ function getWorkflowAttentionScore(workflow: Workflow) {
   );
 }
 
-function getWorkflowRouteTarget(routeWorkflowId?: string) {
+function getWorkflowRouteTarget(workflows: Workflow[], routeWorkflowId?: string) {
   if (
     routeWorkflowId &&
-    demoWorkflows.some((workflow) => workflow.id === routeWorkflowId)
+    workflows.some((workflow) => workflow.id === routeWorkflowId)
   ) {
     return routeWorkflowId;
   }
@@ -315,38 +317,14 @@ function getWorkflowRouteTarget(routeWorkflowId?: string) {
   const lastOpenedWorkflowId = sessionStorage.getItem(LAST_OPENED_WORKFLOW_KEY);
   if (
     lastOpenedWorkflowId &&
-    demoWorkflows.some((workflow) => workflow.id === lastOpenedWorkflowId)
+    workflows.some((workflow) => workflow.id === lastOpenedWorkflowId)
   ) {
     return lastOpenedWorkflowId;
   }
 
-  return [...demoWorkflows].sort(
+  return [...workflows].sort(
     (a, b) => getWorkflowAttentionScore(b) - getWorkflowAttentionScore(a)
   )[0]?.id;
-}
-
-function NavButton({
-  active,
-  label,
-  to,
-}: {
-  active?: boolean;
-  label: string;
-  to: string;
-}) {
-  return (
-    <Link
-      to={to}
-      className={[
-        "clip-hex grid h-11 place-items-center text-sm font-bold transition",
-        active
-          ? "bg-gradient-to-r from-red-500 via-orange-500 to-amber-400 text-white shadow-[0_0_18px_rgba(249,115,22,0.28)]"
-          : "bg-[#251713] text-orange-100/45 hover:bg-[#321b15] hover:text-orange-100/75",
-      ].join(" ")}
-    >
-      {label}
-    </Link>
-  );
 }
 
 function WorkflowBubble({
@@ -478,17 +456,17 @@ function WorkflowBubble({
 }
 
 function WorkflowWorkspacePage() {
-  const location = useLocation();
   const navigate = useNavigate();
   const { workflowId: routeWorkflowId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const [workflowList] = useState(() => getStoredWorkflows());
   const activeWorkflowId =
-    getWorkflowRouteTarget(routeWorkflowId) ?? demoWorkflows[0].id;
+    getWorkflowRouteTarget(workflowList, routeWorkflowId) ?? workflowList[0].id;
   const workflow =
-    demoWorkflows.find((workflowItem) => workflowItem.id === activeWorkflowId) ??
-    demoWorkflows[0];
+    workflowList.find((workflowItem) => workflowItem.id === activeWorkflowId) ??
+    workflowList[0];
   const workflowStorageKey = getWorkflowTodoStorageKey(workflow.id);
   const workflowRuntimeStorageKey = getWorkflowRuntimeStorageKey(workflow.id);
 
@@ -1160,6 +1138,36 @@ function WorkflowWorkspacePage() {
     setTaskomonNotice(`Deleted "${deletedTitle}" and cleared its dependency lines.`);
   }
 
+  function getTimerMinuteValue(value: string, fallback: number) {
+    const parsedValue = Number.parseInt(value, 10);
+
+    if (Number.isNaN(parsedValue)) return fallback;
+
+    return clamp(parsedValue, 1, 180);
+  }
+
+  function handleTimerMinuteChange(
+    timerType: PomodoroPhase,
+    value: string
+  ) {
+    const nextMinutes = getTimerMinuteValue(
+      value,
+      timerType === "focus" ? runtime.focusMinutes : runtime.restMinutes
+    );
+
+    setRuntime((currentRuntime) => ({
+      ...currentRuntime,
+      focusMinutes:
+        timerType === "focus" ? nextMinutes : currentRuntime.focusMinutes,
+      restMinutes: timerType === "rest" ? nextMinutes : currentRuntime.restMinutes,
+    }));
+
+    if (timerPhase === timerType) {
+      setTimerSeconds(nextMinutes * 60);
+      setTimerRunning(false);
+    }
+  }
+
   function handleSetTimerPhase(phase: PomodoroPhase) {
     setTimerPhase(phase);
     setTimerSeconds(
@@ -1264,24 +1272,7 @@ function WorkflowWorkspacePage() {
               </div>
             </div>
 
-            <nav className="mt-20 flex flex-col gap-3 px-1">
-              <NavButton
-                active={location.pathname === "/dashboard"}
-                label="Notice"
-                to="/dashboard"
-              />
-              <NavButton
-                active={location.pathname.startsWith("/habit")}
-                label="Habit"
-                to="/habit"
-              />
-              <NavButton
-                active={location.pathname.startsWith("/workflow")}
-                label="Workflow"
-                to="/workflow"
-              />
-              <NavButton label="Advice" to="/dashboard" />
-            </nav>
+            <NavBar />
           </div>
 
           <div className="rounded-2xl border border-orange-500/20 bg-orange-950/20 p-3">
@@ -1295,7 +1286,7 @@ function WorkflowWorkspacePage() {
               </div>
               <div>
                 <p className="text-sm font-bold text-orange-50">Syamil</p>
-                <p className="text-[11px] text-amber-300/80">Workflow shell</p>
+                <p className="text-[11px] text-amber-300/80">Workflow workspace</p>
               </div>
             </div>
           </div>
@@ -1472,6 +1463,37 @@ function WorkflowWorkspacePage() {
                   ].join(" ")}
                   style={{ width: `${timerProgress}%` }}
                 />
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-[9px] font-black uppercase tracking-wide text-orange-100/45">
+                  Focus min
+                  <input
+                    data-testid="workflow-focus-minutes"
+                    type="number"
+                    min={1}
+                    max={180}
+                    value={runtime.focusMinutes}
+                    onChange={(event) =>
+                      handleTimerMinuteChange("focus", event.target.value)
+                    }
+                    className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-orange-50 outline-none focus:border-orange-300/60"
+                  />
+                </label>
+                <label className="grid gap-1 text-[9px] font-black uppercase tracking-wide text-sky-100/45">
+                  Rest min
+                  <input
+                    data-testid="workflow-rest-minutes"
+                    type="number"
+                    min={1}
+                    max={180}
+                    value={runtime.restMinutes}
+                    onChange={(event) =>
+                      handleTimerMinuteChange("rest", event.target.value)
+                    }
+                    className="rounded-xl border border-sky-300/20 bg-[#0f0a09] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-sky-50 outline-none focus:border-sky-300/60"
+                  />
+                </label>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-2">

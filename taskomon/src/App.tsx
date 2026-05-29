@@ -1,6 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
 import HabitWorkspacePage from "./pages/HabitWorkspacePage";
+import ViewAllHabitPage from "./pages/ViewAllHabitPage";
+import ViewAllWorkflowPage from "./pages/ViewAllWorkflowPage";
 import WorkflowWorkspacePage from "./pages/WorkflowWorkspacePage";
 
 function App() {
@@ -9,6 +11,8 @@ function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/habits" element={<ViewAllHabitPage />} />
+        <Route path="/workflows" element={<ViewAllWorkflowPage />} />
         <Route path="/habit" element={<HabitWorkspacePage />} />
         <Route path="/habit/:habitId" element={<HabitWorkspacePage />} />
         <Route path="/workflow" element={<WorkflowWorkspacePage />} />

@@ -1,20 +1,32 @@
-import { type ReactNode, useMemo } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { type ReactNode, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
 import {
+  DEMO_USER_ID,
   demoBehaviourEvents,
-  demoHabits,
   demoTaskomonComments,
   demoTaskomonState,
   demoTodos,
-  demoWorkflows,
 } from "../data/demoData";
-import { loadFromStorage } from "../services/storageServices";
+import { loadFromStorage, saveToStorage } from "../services/storageServices";
+import {
+  applyHabitAutoReset,
+  deleteHabitArtifacts,
+  deleteWorkflowArtifacts,
+  getDefaultWorkflowRuntime,
+  getHabitTodoStorageKey,
+  getStoredHabits,
+  getStoredWorkflows,
+  getWorkflowRuntimeStorageKey,
+  getWorkflowTodoStorageKey,
+  saveStoredHabits,
+  saveStoredWorkflows,
+} from "../services/workspaceStorage";
+import type { WorkflowRuntimeSummary } from "../services/workspaceStorage";
 import type { Habit, Heaviness, Priority, Todo, TodoStatus, Workflow } from "../types";
+import NavBar from "./NavBar";
 
 const PREVIEW_BUBBLE_HEIGHT = 96;
-const HABIT_STORAGE_PREFIX = "taskomon:habit";
-const WORKFLOW_STORAGE_PREFIX = "taskomon:workflow";
 const PRIORITY_PREVIEW_STYLE: Record<
   Priority,
   { label: string; badge: string; dot: string; widthBoost: number; heightBoost: number }
@@ -67,32 +79,6 @@ const HEAVINESS_PREVIEW_STYLE: Record<
     heightBoost: 8,
   },
 };
-
-type WorkflowRuntimeSummary = Pick<
-  Workflow,
-  "status" | "focusMinutes" | "restMinutes" | "updatedAt"
->;
-
-function getHabitTodoStorageKey(habitId: string) {
-  return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
-}
-
-function getWorkflowTodoStorageKey(workflowId: string) {
-  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:todos`;
-}
-
-function getWorkflowRuntimeStorageKey(workflowId: string) {
-  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:runtime`;
-}
-
-function getDefaultWorkflowRuntime(workflow: Workflow): WorkflowRuntimeSummary {
-  return {
-    status: workflow.status,
-    focusMinutes: workflow.focusMinutes,
-    restMinutes: workflow.restMinutes,
-    updatedAt: workflow.updatedAt,
-  };
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -226,42 +212,6 @@ function ProgressBar({ value }: { value: number }) {
   );
 }
 
-function HexButton({
-  active,
-  label,
-  to,
-}: {
-  active?: boolean;
-  label: string;
-  to: string;
-}) {
-  return (
-    <Link
-      to={to}
-      className="group relative block h-11 w-full text-sm font-bold tracking-wide transition-transform active:scale-[0.98]"
-    >
-      <div
-        className={[
-          "clip-hex absolute inset-0 transition-all duration-200",
-          active
-            ? "bg-gradient-to-r from-red-500 via-orange-500 to-amber-400 shadow-[0_0_18px_rgba(249,115,22,0.28)]"
-            : "bg-[#251713] group-hover:bg-[#321b15]",
-        ].join(" ")}
-      />
-      <div
-        className={[
-          "clip-hex absolute inset-[1px] flex items-center justify-center transition-colors duration-200",
-          active
-            ? "bg-transparent text-white"
-            : "bg-[#17100f] text-orange-100/45 group-hover:text-orange-100/80",
-        ].join(" ")}
-      >
-        <span className="relative z-10">{label}</span>
-      </div>
-    </Link>
-  );
-}
-
 function Panel({
   title,
   children,
@@ -270,7 +220,7 @@ function Panel({
 }: {
   title: string;
   children: ReactNode;
-  action?: string;
+  action?: ReactNode;
   className?: string;
 }) {
   return (
@@ -285,9 +235,9 @@ function Panel({
           {title}
         </h2>
         {action && (
-          <button className="text-[10px] font-black uppercase tracking-wider text-orange-400 transition-colors hover:brightness-125">
+          <div className="text-[10px] font-black uppercase tracking-wider text-orange-400 transition-colors hover:brightness-125">
             {action}
-          </button>
+          </div>
         )}
       </div>
       {children}
@@ -318,11 +268,17 @@ function WorkspaceCard({
   description,
   status,
   progress,
+  onDelete,
+  onEdit,
+  openTo,
 }: {
   title: string;
   description?: string;
   status?: string;
   progress: number;
+  onDelete: () => void;
+  onEdit: () => void;
+  openTo: string;
 }) {
   return (
     <article className="group rounded-2xl border border-orange-950/50 bg-[#15100f] p-4 transition-all duration-200 hover:border-orange-500/30 hover:bg-[#1f1411]">
@@ -344,6 +300,26 @@ function WorkspaceCard({
         </div>
         <ProgressBar value={progress} />
       </div>
+      <div className="mt-4 grid grid-cols-[1fr_auto_auto] gap-2">
+        <Link
+          to={openTo}
+          className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-3 py-2 text-center text-[10px] font-black uppercase text-white transition hover:brightness-110"
+        >
+          Open
+        </Link>
+        <button
+          onClick={onEdit}
+          className="rounded-xl border border-sky-300/25 bg-sky-500/10 px-3 py-2 text-[10px] font-black uppercase text-sky-100 transition hover:bg-sky-500/20"
+        >
+          Set
+        </button>
+        <button
+          onClick={onDelete}
+          className="rounded-xl border border-red-300/25 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-100 transition hover:bg-red-500/20"
+        >
+          Delete
+        </button>
+      </div>
     </article>
   );
 }
@@ -354,12 +330,18 @@ function HabitCard({
   progress,
   completed,
   notice,
+  onDelete,
+  onEdit,
+  openTo,
 }: {
   title: string;
   subtitle: string;
   progress: number;
   completed: string;
   notice?: string;
+  onDelete: () => void;
+  onEdit: () => void;
+  openTo: string;
 }) {
   return (
     <article className="rounded-2xl border border-orange-950/50 bg-[#15100f] p-4 shadow-md">
@@ -381,6 +363,26 @@ function HabitCard({
           {notice}
         </p>
       )}
+      <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
+        <Link
+          to={openTo}
+          className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-3 py-2 text-center text-[10px] font-black uppercase text-white transition hover:brightness-110"
+        >
+          Open
+        </Link>
+        <button
+          onClick={onEdit}
+          className="rounded-xl border border-sky-300/25 bg-sky-500/10 px-3 py-2 text-[10px] font-black uppercase text-sky-100 transition hover:bg-sky-500/20"
+        >
+          Set
+        </button>
+        <button
+          onClick={onDelete}
+          className="rounded-xl border border-red-300/25 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase text-red-100 transition hover:bg-red-500/20"
+        >
+          Delete
+        </button>
+      </div>
     </article>
   );
 }
@@ -433,8 +435,37 @@ function TaskomonMoodPanel({
   );
 }
 
+type DashboardModal =
+  | { type: "create-habit" }
+  | { type: "create-workflow" }
+  | { type: "edit-habit"; id: string }
+  | { type: "edit-workflow"; id: string }
+  | { type: "delete-habit"; id: string }
+  | { type: "delete-workflow"; id: string };
+
+type WorkspaceFormState = {
+  title: string;
+  description: string;
+  habitMode: Habit["mode"];
+  resetFrequency: Habit["resetFrequency"];
+  focusMinutes: string;
+  restMinutes: string;
+};
+
+const DEFAULT_WORKSPACE_FORM: WorkspaceFormState = {
+  title: "",
+  description: "",
+  habitMode: "build_habit",
+  resetFrequency: "daily",
+  focusMinutes: "25",
+  restMinutes: "5",
+};
+
 function DashboardPage() {
-  const location = useLocation();
+  const [habits, setHabits] = useState(() => getStoredHabits());
+  const [workflows, setWorkflows] = useState(() => getStoredWorkflows());
+  const [modal, setModal] = useState<DashboardModal | null>(null);
+  const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_FORM);
   const syncTime = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -443,20 +474,27 @@ function DashboardPage() {
       }).format(new Date()),
     []
   );
+  const activeHabits = habits.filter((habit) => habit.status !== "archived");
 
   const habitTodoMap = useMemo(() => {
     return new Map(
-      demoHabits.map((habit) => [
-        habit.id,
-        loadFromStorage<Todo[]>(
+      activeHabits.map((habit) => {
+        const storedTodos = loadFromStorage<Todo[]>(
           getHabitTodoStorageKey(habit.id),
           getInitialHabitTodos(habit.id)
-        ),
-      ])
-    );
-  }, []);
+        );
+        const resetTodos = applyHabitAutoReset(habit, storedTodos);
 
-  const habitSummaries = demoHabits.map((habit) => {
+        if (resetTodos !== storedTodos) {
+          saveToStorage(getHabitTodoStorageKey(habit.id), resetTodos);
+        }
+
+        return [habit.id, resetTodos] as const;
+      })
+    );
+  }, [activeHabits]);
+
+  const habitSummaries = activeHabits.map((habit) => {
     const habitTodos = habitTodoMap.get(habit.id) ?? [];
     const completed = habitTodos.filter((todo) => todo.status === "done").length;
     const late = habitTodos.filter(isTodoLate).length;
@@ -482,7 +520,7 @@ function DashboardPage() {
     };
   });
 
-  const workflowSummaries = demoWorkflows.map((workflow) => {
+  const workflowSummaries = workflows.map((workflow) => {
     const todos = getWorkflowTodos(workflow);
     const runtime = loadFromStorage<WorkflowRuntimeSummary>(
       getWorkflowRuntimeStorageKey(workflow.id),
@@ -502,10 +540,11 @@ function DashboardPage() {
     ...habitSummaries.flatMap((summary) => summary.todos),
   ];
   const previewTodos = [...allTodos]
+    .filter((todo) => todo.status !== "done")
     .sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     )
-    .slice(0, 5);
+    .slice(0, 1);
   const completedTodos = allTodos.filter((todo) => todo.status === "done").length;
   const inProgressTodos = allTodos.filter(
     (todo) => todo.status === "in_progress"
@@ -563,6 +602,238 @@ function DashboardPage() {
         title: "Taskomon status",
         message: "No urgent habit notices right now. Your workspace shell is ready for the next check.",
       };
+  const modalHabit =
+    modal && "id" in modal && modal.type.includes("habit")
+      ? habits.find((habit) => habit.id === modal.id)
+      : undefined;
+  const modalWorkflow =
+    modal && "id" in modal && modal.type.includes("workflow")
+      ? workflows.find((workflow) => workflow.id === modal.id)
+      : undefined;
+  const modalIsHabit =
+    modal?.type === "create-habit" || modal?.type === "edit-habit";
+  const modalIsWorkflow =
+    modal?.type === "create-workflow" || modal?.type === "edit-workflow";
+  const modalIsDelete =
+    modal?.type === "delete-habit" || modal?.type === "delete-workflow";
+  const modalTitle =
+    modal?.type === "create-habit"
+      ? "Add Habit"
+      : modal?.type === "edit-habit"
+      ? "Set Habit"
+      : modal?.type === "delete-habit"
+      ? "Delete Habit"
+      : modal?.type === "create-workflow"
+      ? "Add Workflow"
+      : modal?.type === "edit-workflow"
+      ? "Set Workflow"
+      : modal?.type === "delete-workflow"
+      ? "Delete Workflow"
+      : "";
+
+  function openCreateHabitModal() {
+    setWorkspaceForm({
+      ...DEFAULT_WORKSPACE_FORM,
+      title: "",
+      description: "",
+      habitMode: "build_habit",
+      resetFrequency: "daily",
+    });
+    setModal({ type: "create-habit" });
+  }
+
+  function openCreateWorkflowModal() {
+    setWorkspaceForm({
+      ...DEFAULT_WORKSPACE_FORM,
+      title: "",
+      description: "",
+      focusMinutes: "25",
+      restMinutes: "5",
+    });
+    setModal({ type: "create-workflow" });
+  }
+
+  function openEditHabitModal(habit: Habit) {
+    setWorkspaceForm({
+      title: habit.title,
+      description: habit.description ?? "",
+      habitMode: habit.mode,
+      resetFrequency: habit.resetFrequency,
+      focusMinutes: "25",
+      restMinutes: "5",
+    });
+    setModal({ type: "edit-habit", id: habit.id });
+  }
+
+  function openEditWorkflowModal(workflow: Workflow) {
+    const runtime = loadFromStorage<WorkflowRuntimeSummary>(
+      getWorkflowRuntimeStorageKey(workflow.id),
+      getDefaultWorkflowRuntime(workflow)
+    );
+
+    setWorkspaceForm({
+      title: workflow.title,
+      description: workflow.description ?? "",
+      habitMode: "build_habit",
+      resetFrequency: "daily",
+      focusMinutes: String(runtime.focusMinutes),
+      restMinutes: String(runtime.restMinutes),
+    });
+    setModal({ type: "edit-workflow", id: workflow.id });
+  }
+
+  function closeModal() {
+    setModal(null);
+    setWorkspaceForm(DEFAULT_WORKSPACE_FORM);
+  }
+
+  function getMinuteValue(value: string, fallback: number) {
+    const parsedValue = Number.parseInt(value, 10);
+
+    if (Number.isNaN(parsedValue)) return fallback;
+
+    return clamp(parsedValue, 1, 180);
+  }
+
+  function handleSaveWorkspaceForm() {
+    if (!modal || modalIsDelete) return;
+
+    const title = workspaceForm.title.trim();
+    const description = workspaceForm.description.trim();
+    if (!title) return;
+
+    const now = new Date().toISOString();
+
+    if (modal.type === "create-habit") {
+      const nextHabit: Habit = {
+        id: crypto.randomUUID(),
+        userId: DEMO_USER_ID,
+        type: "habit",
+        title,
+        description,
+        createdAt: now,
+        updatedAt: now,
+        todos: [],
+        mode: workspaceForm.habitMode,
+        resetFrequency: workspaceForm.resetFrequency,
+        noticeEnabled: true,
+        status: "active",
+      };
+      const nextHabits = [...habits, nextHabit];
+      setHabits(nextHabits);
+      saveStoredHabits(nextHabits);
+      closeModal();
+      return;
+    }
+
+    if (modal.type === "edit-habit" && modalHabit) {
+      const nextHabits = habits.map((habit) =>
+        habit.id === modalHabit.id
+          ? {
+              ...habit,
+              title,
+              description,
+              mode: workspaceForm.habitMode,
+              resetFrequency: workspaceForm.resetFrequency,
+              updatedAt: now,
+            }
+          : habit
+      );
+      setHabits(nextHabits);
+      saveStoredHabits(nextHabits);
+      closeModal();
+      return;
+    }
+
+    if (modal.type === "create-workflow") {
+      const focusMinutes = getMinuteValue(workspaceForm.focusMinutes, 25);
+      const restMinutes = getMinuteValue(workspaceForm.restMinutes, 5);
+      const nextWorkflow: Workflow = {
+        id: crypto.randomUUID(),
+        userId: DEMO_USER_ID,
+        type: "workflow",
+        title,
+        description,
+        createdAt: now,
+        updatedAt: now,
+        todos: [],
+        focusMinutes,
+        restMinutes,
+        status: "active",
+      };
+      const nextWorkflows = [...workflows, nextWorkflow];
+      setWorkflows(nextWorkflows);
+      saveStoredWorkflows(nextWorkflows);
+      saveToStorage(getWorkflowRuntimeStorageKey(nextWorkflow.id), {
+        status: nextWorkflow.status,
+        focusMinutes,
+        restMinutes,
+        updatedAt: now,
+      });
+      closeModal();
+      return;
+    }
+
+    if (modal.type === "edit-workflow" && modalWorkflow) {
+      const focusMinutes = getMinuteValue(
+        workspaceForm.focusMinutes,
+        modalWorkflow.focusMinutes
+      );
+      const restMinutes = getMinuteValue(
+        workspaceForm.restMinutes,
+        modalWorkflow.restMinutes
+      );
+      const nextWorkflows = workflows.map((workflow) =>
+        workflow.id === modalWorkflow.id
+          ? {
+              ...workflow,
+              title,
+              description,
+              focusMinutes,
+              restMinutes,
+              updatedAt: now,
+            }
+          : workflow
+      );
+      const currentRuntime = loadFromStorage<WorkflowRuntimeSummary>(
+        getWorkflowRuntimeStorageKey(modalWorkflow.id),
+        getDefaultWorkflowRuntime(modalWorkflow)
+      );
+
+      setWorkflows(nextWorkflows);
+      saveStoredWorkflows(nextWorkflows);
+      saveToStorage(getWorkflowRuntimeStorageKey(modalWorkflow.id), {
+        ...currentRuntime,
+        focusMinutes,
+        restMinutes,
+        updatedAt: now,
+      });
+      closeModal();
+    }
+  }
+
+  function handleConfirmDelete() {
+    if (!modalIsDelete || !modal) return;
+
+    if (modal.type === "delete-habit" && modalHabit) {
+      const nextHabits = habits.filter((habit) => habit.id !== modalHabit.id);
+      setHabits(nextHabits);
+      saveStoredHabits(nextHabits);
+      deleteHabitArtifacts(modalHabit.id);
+      closeModal();
+      return;
+    }
+
+    if (modal.type === "delete-workflow" && modalWorkflow) {
+      const nextWorkflows = workflows.filter(
+        (workflow) => workflow.id !== modalWorkflow.id
+      );
+      setWorkflows(nextWorkflows);
+      saveStoredWorkflows(nextWorkflows);
+      deleteWorkflowArtifacts(modalWorkflow.id);
+      closeModal();
+    }
+  }
 
   return (
     <main className="h-screen overflow-hidden bg-[#100c0b] text-neutral-100 antialiased">
@@ -616,26 +887,7 @@ function DashboardPage() {
               </div>
             </div>
 
-          <nav className="mt-20 flex flex-col gap-3 px-1">
-            <HexButton
-              active={location.pathname === "/dashboard"}
-              label="Notice"
-              to="/dashboard"
-            />
-
-            <HexButton
-              active={location.pathname.startsWith("/habit")}
-              label="Habit"
-              to="/habit"
-            />
-
-              <HexButton
-                active={location.pathname.startsWith("/workflow")}
-                label="Workflow"
-                to="/workflow"
-              />
-              <HexButton label="Advice" to="/dashboard" />
-            </nav>
+            <NavBar />
           </div>
 
           {/* User Anchor Pod */}
@@ -732,15 +984,14 @@ function DashboardPage() {
                 </div>
 
                 {/* Habit Realms Grid */}
-              <Panel title="Habit Workpaces" action="View all">
+              <Panel
+                title="Habit Workpaces"
+                action={<Link to="/habits">View all</Link>}
+              >
                 <div className="grid gap-3 md:grid-cols-2">
                   {habitSummaries.map((summary) => (
-                  <Link
-                    key={summary.habit.id}
-                    to={`/habit/${summary.habit.id}`}
-                    className="block"
-                  >
                     <HabitCard
+                      key={summary.habit.id}
                       title={summary.habit.title}
                       subtitle={`${getHabitModeLabel(summary.habit)} - ${
                         summary.habit.resetFrequency
@@ -748,28 +999,38 @@ function DashboardPage() {
                       progress={summary.progress}
                       completed={`${summary.completed} / ${summary.todos.length} bubbles clear`}
                       notice={summary.notice}
+                      openTo={`/habit/${summary.habit.id}`}
+                      onEdit={() => openEditHabitModal(summary.habit)}
+                      onDelete={() =>
+                        setModal({ type: "delete-habit", id: summary.habit.id })
+                      }
                     />
-                  </Link>
                   ))}
                 </div>
               </Panel>
 
                 {/* Workflows Framework */}
-                <Panel title="Workflow Workspaces" action="View All">
+                <Panel
+                  title="Workflow Workspaces"
+                  action={<Link to="/workflows">View all</Link>}
+                >
                   <div className="grid gap-3">
                     {workflowSummaries.map((summary) => (
-                      <Link
+                      <WorkspaceCard
                         key={summary.workflow.id}
-                        to={`/workflow/${summary.workflow.id}`}
-                        className="block"
-                      >
-                        <WorkspaceCard
-                          title={summary.workflow.title}
-                          description={summary.workflow.description}
-                          status={summary.runtime.status}
-                          progress={summary.progress}
-                        />
-                      </Link>
+                        title={summary.workflow.title}
+                        description={summary.workflow.description}
+                        status={summary.runtime.status}
+                        progress={summary.progress}
+                        openTo={`/workflow/${summary.workflow.id}`}
+                        onEdit={() => openEditWorkflowModal(summary.workflow)}
+                        onDelete={() =>
+                          setModal({
+                            type: "delete-workflow",
+                            id: summary.workflow.id,
+                          })
+                        }
+                      />
                     ))}
                   </div>
                 </Panel>
@@ -904,20 +1165,20 @@ function DashboardPage() {
 
                 <Panel title="Navigate">
                   <div className="grid gap-2">
-                    <Link
-                      to="/workflow"
+                    <button
+                      onClick={openCreateWorkflowModal}
                       className="rounded-xl border border-orange-500/30 bg-gradient-to-r from-orange-500/10 to-amber-500/5 px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100 transition hover:brightness-125"
                     >
-                      + Initialise Workflow Pipeline
-                    </Link>
-                    <Link
-                      to="/habit"
+                      + Add Workflow
+                    </button>
+                    <button
+                      onClick={openCreateHabitModal}
                       className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100"
                     >
-                      + Construct Habit Node
-                    </Link>
+                      + Add Habit
+                    </button>
                     <button className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100">
-                      ? Request AI Assessment
+                      ? Request Report
                     </button>
                   </div>
                 </Panel>
@@ -926,6 +1187,168 @@ function DashboardPage() {
           </div>
         </section>
       </div>
+      {modal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-md rounded-2xl border border-orange-300/25 bg-[#15100f] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.55)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-300">
+                  Dashboard setup
+                </p>
+                <h3 className="mt-1 text-lg font-black text-white">{modalTitle}</h3>
+              </div>
+              <button
+                onClick={closeModal}
+                className="rounded-full border border-orange-300/20 bg-orange-500/10 px-3 py-1.5 text-[10px] font-black uppercase text-orange-100/70 transition hover:bg-orange-500/20"
+              >
+                Close
+              </button>
+            </div>
+
+            {modalIsDelete ? (
+              <div className="mt-5">
+                <p className="text-sm font-semibold leading-relaxed text-orange-50/80">
+                  Delete{" "}
+                  <span className="font-black text-white">
+                    {modalHabit?.title ?? modalWorkflow?.title}
+                  </span>
+                  ? This also clears its saved todos, timer data, and reset data.
+                </p>
+                <div className="mt-5 grid grid-cols-2 gap-2">
+                  <button
+                    onClick={closeModal}
+                    className="rounded-xl border border-orange-300/20 bg-orange-500/10 px-4 py-2 text-xs font-black uppercase text-orange-100 transition hover:bg-orange-500/20"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmDelete}
+                    className="rounded-xl border border-red-300/35 bg-red-500/15 px-4 py-2 text-xs font-black uppercase text-red-100 transition hover:bg-red-500/25"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 grid gap-3">
+                <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
+                  Title
+                  <input
+                    value={workspaceForm.title}
+                    onChange={(event) =>
+                      setWorkspaceForm((form) => ({
+                        ...form,
+                        title: event.target.value,
+                      }))
+                    }
+                    className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none focus:border-orange-300/60"
+                  />
+                </label>
+
+                <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
+                  Description
+                  <textarea
+                    value={workspaceForm.description}
+                    onChange={(event) =>
+                      setWorkspaceForm((form) => ({
+                        ...form,
+                        description: event.target.value,
+                      }))
+                    }
+                    rows={3}
+                    className="resize-none rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none focus:border-orange-300/60"
+                  />
+                </label>
+
+                {modalIsHabit && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
+                      Habit mode
+                      <select
+                        value={workspaceForm.habitMode}
+                        onChange={(event) =>
+                          setWorkspaceForm((form) => ({
+                            ...form,
+                            habitMode: event.target.value as Habit["mode"],
+                          }))
+                        }
+                        className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-orange-50 outline-none focus:border-orange-300/60"
+                      >
+                        <option value="build_habit">Build habit</option>
+                        <option value="one_time">One time</option>
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
+                      Reset
+                      <select
+                        value={workspaceForm.resetFrequency}
+                        disabled={workspaceForm.habitMode === "one_time"}
+                        onChange={(event) =>
+                          setWorkspaceForm((form) => ({
+                            ...form,
+                            resetFrequency: event.target.value as Habit["resetFrequency"],
+                          }))
+                        }
+                        className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-orange-50 outline-none disabled:opacity-40 focus:border-orange-300/60"
+                      >
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
+
+                {modalIsWorkflow && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
+                      Focus min
+                      <input
+                        type="number"
+                        min={1}
+                        max={180}
+                        value={workspaceForm.focusMinutes}
+                        onChange={(event) =>
+                          setWorkspaceForm((form) => ({
+                            ...form,
+                            focusMinutes: event.target.value,
+                          }))
+                        }
+                        className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-orange-50 outline-none focus:border-orange-300/60"
+                      />
+                    </label>
+
+                    <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
+                      Rest min
+                      <input
+                        type="number"
+                        min={1}
+                        max={180}
+                        value={workspaceForm.restMinutes}
+                        onChange={(event) =>
+                          setWorkspaceForm((form) => ({
+                            ...form,
+                            restMinutes: event.target.value,
+                          }))
+                        }
+                        className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2 text-xs font-semibold normal-case tracking-normal text-orange-50 outline-none focus:border-orange-300/60"
+                      />
+                    </label>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleSaveWorkspaceForm}
+                  className="mt-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2.5 text-xs font-black uppercase text-white transition hover:brightness-110"
+                >
+                  Save
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
