@@ -1,47 +1,34 @@
-export type TodoStatus = "not_started" | "in_progress" | "done";
+export type TaskomonMood =
+  | "neutral"
+  | "happy"
+  | "focused"
+  | "worried"
+  | "tired"
+  | "proud";
 
-export type Priority = "low" | "medium" | "high";
-
-export type Heaviness = "light" | "medium" | "heavy";
-
-export type ParentType = "workflow" | "habit";
-
-export type DueMode = "anytime" | "by_time" | "at_time";
-
-export interface Todo {
+export interface TaskomonState {
   id: string;
-  parentType: ParentType;
-  parentId: string;
-  title: string;
-  status: TodoStatus;
-  priority: Priority;
-  heaviness: Heaviness;
-  blockedByTodoId?: string;
-  dueMode?: DueMode;
-  dueTime?: string;
-  startedAt?: string;
-  completedAt?: string;
-  createdAt: string;
+  userId: string;
+
+  mood: TaskomonMood;
+  thought: string;
+
+  focusScore: number;
+  fatigueScore: number;
+  consistencyScore: number;
+
+  lastCommentAt?: string;
+  updatedAt: string;
 }
 
-export interface Workflow {
+export interface TaskomonComment {
   id: string;
-  title: string;
-  description?: string;
-  createdAt: string;
-  focusMinutes: number;
-  restMinutes: number;
-}
+  userId: string;
+  workspaceId?: string;
+  todoId?: string;
 
-export interface Habit {
-  id: string;
-  title: string;
-  description?: string;
-  resetFrequency: "daily" | "weekly";
-  createdAt: string;
-}
+  mood: TaskomonMood;
+  message: string;
 
-export interface TaskomonMessage {
-  mood: "happy" | "focused" | "tired" | "worried" | "proud";
-  text: string;
+  createdAt: string;
 }
