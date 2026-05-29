@@ -1,16 +1,167 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
 import {
+  demoBehaviourEvents,
   demoHabits,
   demoTaskomonComments,
   demoTaskomonState,
   demoTodos,
   demoWorkflows,
 } from "../data/demoData";
-import type { TodoStatus } from "../types";
+import { loadFromStorage } from "../services/storageServices";
+import type { Habit, Heaviness, Priority, Todo, TodoStatus, Workflow } from "../types";
 
-const BUBBLE_SIZE = 96; // Scaled down for preview space
+const PREVIEW_BUBBLE_HEIGHT = 96;
+const HABIT_STORAGE_PREFIX = "taskomon:habit";
+const PRIORITY_PREVIEW_STYLE: Record<
+  Priority,
+  { label: string; badge: string; dot: string; widthBoost: number; heightBoost: number }
+> = {
+  low: {
+    label: "Low priority",
+    badge: "border-sky-300/30 bg-sky-400/12 text-sky-100",
+    dot: "bg-sky-300",
+    widthBoost: 0,
+    heightBoost: 0,
+  },
+  medium: {
+    label: "Medium priority",
+    badge: "border-amber-300/35 bg-amber-400/14 text-amber-100",
+    dot: "bg-amber-300",
+    widthBoost: 14,
+    heightBoost: 6,
+  },
+  high: {
+    label: "High priority",
+    badge: "border-red-300/40 bg-red-400/16 text-red-50",
+    dot: "bg-red-300",
+    widthBoost: 32,
+    heightBoost: 12,
+  },
+};
+const HEAVINESS_PREVIEW_STYLE: Record<
+  Heaviness,
+  { label: string; badge: string; ring: string; stripe: string; heightBoost: number }
+> = {
+  light: {
+    label: "Light weight",
+    badge: "border-emerald-300/30 bg-emerald-400/12 text-emerald-100",
+    ring: "ring-1 ring-emerald-200/20",
+    stripe: "from-emerald-300/70 via-emerald-200/25 to-transparent",
+    heightBoost: 0,
+  },
+  medium: {
+    label: "Medium weight",
+    badge: "border-violet-300/30 bg-violet-400/12 text-violet-100",
+    ring: "ring-2 ring-violet-200/20",
+    stripe: "from-violet-300/75 via-violet-200/25 to-transparent",
+    heightBoost: 4,
+  },
+  heavy: {
+    label: "Heavy weight",
+    badge: "border-fuchsia-300/35 bg-fuchsia-400/14 text-fuchsia-50",
+    ring: "ring-[3px] ring-fuchsia-200/22",
+    stripe: "from-fuchsia-300/85 via-fuchsia-200/30 to-transparent",
+    heightBoost: 8,
+  },
+};
+
+function getHabitTodoStorageKey(habitId: string) {
+  return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getPreviewBubbleDimensions(
+  todo: Pick<Todo, "title" | "priority" | "heaviness">
+) {
+  const priority = todo.priority ?? "medium";
+  const heaviness = todo.heaviness ?? "medium";
+  const titleBoost = Math.max(0, todo.title.trim().length - 14) * 4.5;
+
+  return {
+    width: clamp(
+      106 + PRIORITY_PREVIEW_STYLE[priority].widthBoost + titleBoost,
+      96,
+      230
+    ),
+    height: clamp(
+      PREVIEW_BUBBLE_HEIGHT +
+        PRIORITY_PREVIEW_STYLE[priority].heightBoost +
+        HEAVINESS_PREVIEW_STYLE[heaviness].heightBoost,
+      92,
+      124
+    ),
+  };
+}
+
+function getInitialHabitTodos(habitId: string) {
+  return demoTodos.filter(
+    (todo) => todo.parentType === "habit" && todo.parentId === habitId
+  );
+}
+
+function getStatusLabel(status: TodoStatus) {
+  if (status === "in_progress") return "Doing";
+  if (status === "done") return "Done";
+  return "Idle";
+}
+
+function getDueMinutes(todo: Todo) {
+  if (!todo.dueTime) return null;
+
+  const [hours, minutes] = todo.dueTime.split(":").map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+
+  return hours * 60 + minutes;
+}
+
+function getNowMinutes() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
+function isTodoLate(todo: Todo) {
+  const dueMinutes = getDueMinutes(todo);
+  return (
+    todo.status !== "done" &&
+    todo.dueMode !== "anytime" &&
+    dueMinutes !== null &&
+    dueMinutes < getNowMinutes()
+  );
+}
+
+function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
+  return todo.dependencyIds.some((dependencyId) => {
+    const dependency = allTodos.find((item) => item.id === dependencyId);
+    return dependency && dependency.status !== "done";
+  });
+}
+
+function getTodoProgress(todos: Todo[]) {
+  if (todos.length === 0) return 0;
+
+  return Math.round(
+    (todos.filter((todo) => todo.status === "done").length / todos.length) * 100
+  );
+}
+
+function clampScore(value: number) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function getWorkflowTodos(workflow: Workflow) {
+  return demoTodos.filter(
+    (todo) => todo.parentType === "workflow" && todo.parentId === workflow.id
+  );
+}
+
+function getHabitModeLabel(habit: Habit) {
+  return habit.mode === "build_habit" ? "Build rhythm" : "One time";
+}
 
 function getBubbleTheme(status: TodoStatus) {
   if (status === "done") {
@@ -172,11 +323,13 @@ function HabitCard({
   subtitle,
   progress,
   completed,
+  notice,
 }: {
   title: string;
   subtitle: string;
   progress: number;
   completed: string;
+  notice?: string;
 }) {
   return (
     <article className="rounded-2xl border border-orange-950/50 bg-[#15100f] p-4 shadow-md">
@@ -193,11 +346,26 @@ function HabitCard({
         <p className="text-[11px] font-black uppercase tracking-wide text-orange-100/30">Today</p>
         <p className="text-xs font-black text-orange-100">{completed}</p>
       </div>
+      {notice && (
+        <p className="mt-2 truncate rounded-xl border border-sky-300/15 bg-sky-500/10 px-2.5 py-1.5 text-[10px] font-bold text-sky-100/70">
+          {notice}
+        </p>
+      )}
     </article>
   );
 }
 
-function TaskomonMoodPanel() {
+function TaskomonMoodPanel({
+  thought,
+  focusScore,
+  fatigueScore,
+  consistencyScore,
+}: {
+  thought: string;
+  focusScore: number;
+  fatigueScore: number;
+  consistencyScore: number;
+}) {
   return (
     <Panel title="Taskomon State">
       <div className="rounded-2xl border border-orange-950/60 bg-[#0c0908] p-5 text-center shadow-inner">
@@ -211,16 +379,16 @@ function TaskomonMoodPanel() {
             Current thought
           </p>
           <p className="mt-1.5 text-xs font-bold leading-relaxed text-orange-50">
-            “{demoTaskomonState.thought}”
+            {thought}
           </p>
         </div>
       </div>
 
       <div className="mt-5 grid gap-3.5">
         {[
-          { title: "Focus", val: demoTaskomonState.focusScore },
-          { title: "Fatigue", val: demoTaskomonState.fatigueScore },
-          { title: "Consistency", val: demoTaskomonState.consistencyScore },
+          { title: "Focus", val: focusScore },
+          { title: "Fatigue", val: fatigueScore },
+          { title: "Consistency", val: consistencyScore },
         ].map((attr) => (
           <div key={attr.title}>
             <div className="mb-1.5 flex justify-between text-[11px] font-bold">
@@ -237,9 +405,129 @@ function TaskomonMoodPanel() {
 
 function DashboardPage() {
   const location = useLocation();
-  const completedTodos = demoTodos.filter((todo) => todo.status === "done").length;
-  const inProgressTodos = demoTodos.filter((todo) => todo.status === "in_progress").length;
-  const heavyTodos = demoTodos.filter((todo) => todo.heaviness === "heavy").length;
+  const syncTime = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date()),
+    []
+  );
+
+  const habitTodoMap = useMemo(() => {
+    return new Map(
+      demoHabits.map((habit) => [
+        habit.id,
+        loadFromStorage<Todo[]>(
+          getHabitTodoStorageKey(habit.id),
+          getInitialHabitTodos(habit.id)
+        ),
+      ])
+    );
+  }, []);
+
+  const habitSummaries = demoHabits.map((habit) => {
+    const habitTodos = habitTodoMap.get(habit.id) ?? [];
+    const completed = habitTodos.filter((todo) => todo.status === "done").length;
+    const late = habitTodos.filter(isTodoLate).length;
+    const blocked = habitTodos.filter((todo) => isTodoBlocked(todo, habitTodos)).length;
+    const nextDue = habitTodos
+      .filter((todo) => todo.status !== "done" && todo.dueMode !== "anytime")
+      .sort((a, b) => (getDueMinutes(a) ?? 9999) - (getDueMinutes(b) ?? 9999))[0];
+
+    return {
+      habit,
+      todos: habitTodos,
+      completed,
+      late,
+      blocked,
+      progress: getTodoProgress(habitTodos),
+      notice: late
+        ? `${late} timed bubble${late > 1 ? "s" : ""} late`
+        : blocked
+        ? `${blocked} dependency wait${blocked > 1 ? "s" : ""}`
+        : nextDue
+        ? `Next: ${nextDue.title}`
+        : "No timed bubbles left",
+    };
+  });
+
+  const workflowSummaries = demoWorkflows.map((workflow) => {
+    const todos = getWorkflowTodos(workflow);
+
+    return {
+      workflow,
+      todos,
+      progress: getTodoProgress(todos),
+    };
+  });
+
+  const allTodos = [
+    ...workflowSummaries.flatMap((summary) => summary.todos),
+    ...habitSummaries.flatMap((summary) => summary.todos),
+  ];
+  const previewTodos = [...allTodos]
+    .sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    )
+    .slice(0, 5);
+  const completedTodos = allTodos.filter((todo) => todo.status === "done").length;
+  const inProgressTodos = allTodos.filter(
+    (todo) => todo.status === "in_progress"
+  ).length;
+  const heavyTodos = allTodos.filter((todo) => todo.heaviness === "heavy").length;
+  const lateTodos = allTodos.filter(isTodoLate);
+  const blockedTodos = allTodos.filter((todo) => isTodoBlocked(todo, allTodos));
+  const activeTodo = allTodos.find((todo) => todo.status === "in_progress");
+  const heavyActiveTodo = allTodos.find(
+    (todo) => todo.status === "in_progress" && todo.heaviness === "heavy"
+  );
+  const rhythmStatus = lateTodos.length
+    ? "Needs check"
+    : blockedTodos.length
+    ? "Blocked"
+    : activeTodo
+    ? "In flow"
+    : "Stable";
+  const taskomonThought = lateTodos[0]
+    ? `${lateTodos[0].title} is past its planned time. Adjust the habit or clear it gently.`
+    : blockedTodos[0]
+    ? `${blockedTodos[0].title} is blocked by a dependency line.`
+    : heavyActiveTodo
+    ? `${heavyActiveTodo.title} is heavy and currently active. Watch for slowdown.`
+    : activeTodo
+    ? `${activeTodo.title} is the current bubble. Keep the pace steady.`
+    : demoTaskomonState.thought;
+  const focusScore = clampScore(
+    demoTaskomonState.focusScore + completedTodos * 3 - lateTodos.length * 7
+  );
+  const fatigueScore = clampScore(
+    demoTaskomonState.fatigueScore + heavyTodos * 4 + lateTodos.length * 6
+  );
+  const consistencyScore = clampScore(
+    demoTaskomonState.consistencyScore +
+      habitSummaries.filter((summary) => summary.progress === 100).length * 8 -
+      lateTodos.length * 5
+  );
+  const dashboardNotice = lateTodos[0]
+    ? {
+        title: "Habit timing notice",
+        message: `"${lateTodos[0].title}" is past its planned time. Review the habit workspace and either finish it or move the timing.`,
+      }
+    : blockedTodos[0]
+    ? {
+        title: "Dependency notice",
+        message: `"${blockedTodos[0].title}" is waiting on another bubble. Follow the line and clear the prerequisite first.`,
+      }
+    : heavyActiveTodo
+    ? {
+        title: "Taskomon intercept alert",
+        message: `"${heavyActiveTodo.title}" is marked heavy and in progress. If the pace slows, split it into a smaller bubble or take a rest.`,
+      }
+    : {
+        title: "Taskomon status",
+        message: "No urgent habit notices right now. Your workspace shell is ready for the next check.",
+      };
 
   return (
     <main className="h-screen overflow-hidden bg-[#100c0b] text-neutral-100 antialiased">
@@ -301,7 +589,7 @@ function DashboardPage() {
             />
 
             <HexButton
-              active={location.pathname === "/habit"}
+              active={location.pathname.startsWith("/habit")}
               label="Habit"
               to="/habit"
             />
@@ -326,6 +614,14 @@ function DashboardPage() {
                 <p className="text-[11px] text-amber-300/80">Command deck</p>
               </div>
             </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button className="rounded-lg border border-sky-300/20 bg-sky-500/10 px-2 py-1.5 text-[10px] font-black uppercase text-sky-100/70">
+                Login
+              </button>
+              <button className="rounded-lg border border-emerald-300/20 bg-emerald-500/10 px-2 py-1.5 text-[10px] font-black uppercase text-emerald-100/70">
+                Register
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -345,7 +641,7 @@ function DashboardPage() {
                 <p className="text-[9px] font-black uppercase tracking-wider text-orange-100/45">
                   Local Sync Time
                 </p>
-                <p className="text-sm font-black text-orange-100">09:41 PM</p>
+                <p className="text-sm font-black text-orange-100">{syncTime}</p>
               </div>
             </div>
           </header>
@@ -364,18 +660,20 @@ function DashboardPage() {
                     </div>
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-400">
-                        Taskomon Intercept Alert
+                        {dashboardNotice.title}
                       </p>
                       <p className="mt-1.5 max-w-2xl text-base font-bold leading-snug text-orange-50">
-                        Your heavy task has been locked in progress phase for extended parameters. If it feels static, 
-                        isolate into a smaller structural bubble cluster before exhaustion triggers.
+                        {dashboardNotice.message}
                       </p>
                       <div className="mt-4 flex flex-wrap gap-2">
-                        <button className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black text-white transition hover:brightness-110">
-                          Split current task
-                        </button>
-                        <button className="rounded-xl border border-orange-500/30 bg-orange-500/5 px-4 py-2 text-xs font-bold text-orange-200 transition hover:bg-orange-500/10">
-                          Start rest timer
+                        <Link
+                          to="/habit"
+                          className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black text-white transition hover:brightness-110"
+                        >
+                          Open habit
+                        </Link>
+                        <button className="rounded-xl border border-sky-400/30 bg-sky-500/10 px-4 py-2 text-xs font-bold text-sky-100 transition hover:bg-sky-500/20">
+                          Ask advice
                         </button>
                       </div>
                     </div>
@@ -387,21 +685,30 @@ function DashboardPage() {
                   <MiniStat label="Tasks cleared" value={completedTodos} />
                   <MiniStat label="Currently doing" value={inProgressTodos} />
                   <MiniStat label="Heavy tasks" value={heavyTodos} />
-                  <MiniStat label="Rhythm Status" value="Stable" />
+                  <MiniStat
+                    label="Rhythm Status"
+                    value={rhythmStatus}
+                    note={`${demoBehaviourEvents.length} behaviour events tracked`}
+                  />
                 </div>
 
                 {/* Habit Realms Grid */}
               <Panel title="Habit Spaces Framework" action="View all units">
                 <div className="grid gap-3 md:grid-cols-2">
-                  {demoHabits.map((habit, index) => (
-                  <Link key={habit.id} to="/habit" className="block">
+                  {habitSummaries.map((summary) => (
+                  <Link
+                    key={summary.habit.id}
+                    to={`/habit/${summary.habit.id}`}
+                    className="block"
+                  >
                     <HabitCard
-                      title={habit.title}
-                      subtitle={`${
-                      habit.mode === "build_habit" ? "Build rhythm" : "Singular objective"
-                      } · ${habit.resetFrequency}`}
-                      progress={index === 0 ? 70 : 40}
-                      completed={index === 0 ? "2 / 3 units clear" : "2 / 5 units clear"}
+                      title={summary.habit.title}
+                      subtitle={`${getHabitModeLabel(summary.habit)} - ${
+                        summary.habit.resetFrequency
+                      } reset`}
+                      progress={summary.progress}
+                      completed={`${summary.completed} / ${summary.todos.length} bubbles clear`}
+                      notice={summary.notice}
                     />
                   </Link>
                   ))}
@@ -411,13 +718,13 @@ function DashboardPage() {
                 {/* Workflows Framework */}
                 <Panel title="Active Workflow Complexes" action="Inspect pipelines">
                   <div className="grid gap-3">
-                    {demoWorkflows.map((workflow, index) => (
+                    {workflowSummaries.map((summary) => (
                       <WorkspaceCard
-                        key={workflow.id}
-                        title={workflow.title}
-                        description={workflow.description}
-                        status={workflow.status}
-                        progress={index === 0 ? 45 : 25}
+                        key={summary.workflow.id}
+                        title={summary.workflow.title}
+                        description={summary.workflow.description}
+                        status={summary.workflow.status}
+                        progress={summary.progress}
                       />
                     ))}
                   </div>
@@ -426,34 +733,70 @@ function DashboardPage() {
                 {/* Authentic Fluid-Bubble Node Previewer */}
                 <Panel title="Live Node Matrix Preview">
                   <div className="flex flex-wrap items-center justify-start gap-5 p-2 bg-[#0c0908]/50 rounded-2xl border border-orange-950/40">
-                    {demoTodos.slice(0, 5).map((todo, i) => {
+                    {previewTodos.map((todo, i) => {
                       const theme = getBubbleTheme(todo.status as TodoStatus);
+                      const dimensions = getPreviewBubbleDimensions(todo);
+                      const priority = todo.priority ?? "medium";
+                      const heaviness = todo.heaviness ?? "medium";
+                      const priorityStyle = PRIORITY_PREVIEW_STYLE[priority];
+                      const heavinessStyle = HEAVINESS_PREVIEW_STYLE[heaviness];
                       return (
                         <div
                           key={todo.id}
                           className={[
                             "bubble-preview-idle relative select-none rounded-full border flex items-center justify-center p-3 text-center",
                             theme.shell,
+                            heavinessStyle.ring,
                           ].join(" ")}
                           style={{
-                            width: BUBBLE_SIZE,
-                            height: BUBBLE_SIZE,
+                            width: dimensions.width,
+                            height: dimensions.height,
                             animationDelay: `${i * 240}ms`,
                           }}
                         >
-                          <div className="overflow-hidden rounded-full p-1">
+                          <div
+                            className={[
+                              "absolute left-0 top-1/2 h-[62%] w-1.5 -translate-y-1/2 rounded-full bg-gradient-to-b",
+                              heavinessStyle.stripe,
+                            ].join(" ")}
+                          />
+                          <div
+                            className={[
+                              "absolute right-3 top-3 h-2 w-2 rounded-full shadow-[0_0_10px_currentColor]",
+                              priorityStyle.dot,
+                            ].join(" ")}
+                          />
+                          <div className="min-w-0 overflow-hidden rounded-full p-1">
                             <div className={[
                               "pointer-events-none absolute -right-3 -top-3 h-12 w-12 rounded-full blur-xl opacity-30",
                               theme.glow
                             ].join(" ")} />
-                            <p className="line-clamp-2 text-[10px] font-black leading-tight text-neutral-100 relative z-10">
+                            <p className="relative z-10 line-clamp-2 text-[10px] font-black leading-tight text-neutral-100 [overflow-wrap:anywhere]">
                               {todo.title}
                             </p>
+                            <div className="relative z-10 mt-1 flex flex-wrap justify-center gap-1">
+                              <span
+                                className={[
+                                  "rounded-full border px-1.5 py-0.5 text-[7px] font-black uppercase",
+                                  priorityStyle.badge,
+                                ].join(" ")}
+                              >
+                                {priorityStyle.label}
+                              </span>
+                              <span
+                                className={[
+                                  "rounded-full border px-1.5 py-0.5 text-[7px] font-black uppercase",
+                                  heavinessStyle.badge,
+                                ].join(" ")}
+                              >
+                                {heavinessStyle.label}
+                              </span>
+                            </div>
                             <span className={[
-                              "mt-1.5 inline-block rounded-full border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide scale-90",
+                              "relative z-10 mt-1 inline-block rounded-full border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide scale-90",
                               theme.label
                             ].join(" ")}>
-                              {todo.status === "in_progress" ? "Doing" : todo.status === "done" ? "Done" : "Idle"}
+                              {getStatusLabel(todo.status)}
                             </span>
                           </div>
                         </div>
@@ -465,7 +808,37 @@ function DashboardPage() {
 
               {/* Auxiliary Monitor Sidebar Panel */}
               <aside className="flex flex-col gap-6">
-                <TaskomonMoodPanel />
+                <TaskomonMoodPanel
+                  thought={taskomonThought}
+                  focusScore={focusScore}
+                  fatigueScore={fatigueScore}
+                  consistencyScore={consistencyScore}
+                />
+
+                <Panel title="Habit Analysis Report">
+                  <div className="grid gap-2.5">
+                    {habitSummaries.map((summary) => (
+                      <div
+                        key={summary.habit.id}
+                        className="rounded-2xl border border-sky-300/15 bg-[#10161d] p-3"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="truncate text-xs font-black text-sky-50">
+                            {summary.habit.title}
+                          </p>
+                          <span className="rounded-full border border-sky-300/20 bg-sky-500/10 px-2 py-0.5 text-[10px] font-black text-sky-100">
+                            {summary.progress}%
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[10px] font-semibold text-sky-100/55">
+                          {summary.completed}/{summary.todos.length} clear,
+                          {" "}
+                          {summary.late} late, {summary.blocked} blocked
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
 
                 <Panel title="Raw Telemetry Stream">
                   <div className="flex flex-col gap-2.5">

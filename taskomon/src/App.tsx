@@ -9,6 +9,7 @@ function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/habit" element={<HabitWorkspacePage />} />
+        <Route path="/habit/:habitId" element={<HabitWorkspacePage />} />
       </Routes>
     </BrowserRouter>
   );
