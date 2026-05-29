@@ -56,7 +56,11 @@ function NavBar() {
         label="Workflow"
         to="/workflow"
       />
-      <NavItem label="Advice" to="/dashboard" />
+      <NavItem
+        active={location.pathname.startsWith("/advice")}
+        label="Advice"
+        to="/advice"
+      />
     </nav>
   );
 }

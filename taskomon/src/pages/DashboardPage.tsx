@@ -963,9 +963,12 @@ function DashboardPage() {
                         >
                           {heavyActiveTodo ? "Open workflow" : "Open habit"}
                         </Link>
-                        <button className="rounded-xl border border-sky-400/30 bg-sky-500/10 px-4 py-2 text-xs font-bold text-sky-100 transition hover:bg-sky-500/20">
+                        <Link
+                          to="/advice"
+                          className="rounded-xl border border-sky-400/30 bg-sky-500/10 px-4 py-2 text-xs font-bold text-sky-100 transition hover:bg-sky-500/20"
+                        >
                           Ask advice
-                        </button>
+                        </Link>
                       </div>
                     </div>
                   </div>
@@ -1177,9 +1180,12 @@ function DashboardPage() {
                     >
                       + Add Habit
                     </button>
-                    <button className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100">
+                    <Link
+                      to="/advice"
+                      className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100"
+                    >
                       ? Request Report
-                    </button>
+                    </Link>
                   </div>
                 </Panel>
               </aside>
