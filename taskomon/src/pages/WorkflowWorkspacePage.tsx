@@ -282,6 +282,13 @@ function wouldCreateDependencyCycle(
 type WorkflowRuntime = WorkflowRuntimeSummary;
 
 const LAST_OPENED_WORKFLOW_KEY = "taskomon:lastOpenedWorkflowId";
+const POMODORO_TRANSITION_SECONDS = 15;
+
+type PhaseTransitionState = {
+  completedPhase: PomodoroPhase;
+  nextPhase: PomodoroPhase;
+  remainingSeconds: number;
+};
 
 function getInitialWorkflowTodos(workflowId: string) {
   return getSeedTodosForWorkspace(workflowId, "workflow")
@@ -300,6 +307,121 @@ function getDefaultRuntime(workflow: Workflow): WorkflowRuntime {
   return getDefaultWorkflowRuntime(workflow);
 }
 
+type PomodoroAlarmRef = {
+  current: AudioContext | null;
+};
+
+function getPomodoroAudioContext(alarmRef: PomodoroAlarmRef) {
+  if (typeof window === "undefined") return null;
+
+  const AudioContextConstructor =
+    window.AudioContext ??
+    (window as Window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+
+  if (!AudioContextConstructor) return null;
+
+  if (!alarmRef.current) {
+    alarmRef.current = new AudioContextConstructor();
+  }
+
+  return alarmRef.current;
+}
+
+async function primePomodoroAlarm(alarmRef: PomodoroAlarmRef) {
+  const audioContext = getPomodoroAudioContext(alarmRef);
+
+  if (!audioContext || audioContext.state !== "suspended") return;
+
+  try {
+    await audioContext.resume();
+  } catch {
+    // Some browsers keep audio locked until a stronger user gesture.
+  }
+}
+
+function playPomodoroAlarm(
+  alarmRef: PomodoroAlarmRef,
+  completedPhase: PomodoroPhase,
+  retryAfterResume = true
+) {
+  const audioContext = getPomodoroAudioContext(alarmRef);
+
+  if (!audioContext) return;
+
+  if (audioContext.state === "suspended" && retryAfterResume) {
+    void audioContext
+      .resume()
+      .then(() => playPomodoroAlarm(alarmRef, completedPhase, false))
+      .catch(() => undefined);
+    return;
+  }
+
+  const tones: Array<number | null> =
+    completedPhase === "focus"
+      ? [
+          880,
+          660,
+          880,
+          null,
+          880,
+          660,
+          880,
+          null,
+          988,
+          880,
+          660,
+          null,
+          988,
+          880,
+          660,
+          null,
+          880,
+          988,
+          1174.66,
+        ]
+      : [
+          523.25,
+          659.25,
+          783.99,
+          null,
+          659.25,
+          783.99,
+          1046.5,
+          null,
+          523.25,
+          659.25,
+          783.99,
+          null,
+          1046.5,
+          783.99,
+          659.25,
+        ];
+  const startTime = audioContext.currentTime + 0.03;
+  const toneDuration = completedPhase === "focus" ? 0.34 : 0.36;
+  const gap = completedPhase === "focus" ? 0.15 : 0.16;
+
+  tones.forEach((frequency, index) => {
+    if (frequency === null) return;
+
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    const toneStart = startTime + index * (toneDuration + gap);
+    const toneEnd = toneStart + toneDuration;
+
+    oscillator.type = completedPhase === "focus" ? "square" : "sine";
+    oscillator.frequency.setValueAtTime(frequency, toneStart);
+    gain.gain.setValueAtTime(0.0001, toneStart);
+    gain.gain.exponentialRampToValueAtTime(0.22, toneStart + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, toneEnd);
+
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start(toneStart);
+    oscillator.stop(toneEnd + 0.04);
+  });
+}
+
 function formatClock(totalSeconds: number) {
   const safeSeconds = Math.max(0, totalSeconds);
   const minutes = Math.floor(safeSeconds / 60);
@@ -313,6 +435,50 @@ function getTimerDurationSeconds(
   runtime: Pick<WorkflowRuntime, "focusMinutes" | "restMinutes">
 ) {
   return (phase === "focus" ? runtime.focusMinutes : runtime.restMinutes) * 60;
+}
+
+function getResolvedStoredTransition(
+  runtime: WorkflowRuntime
+): PhaseTransitionState | null {
+  if (!runtime.timerTransitionNextPhase) return null;
+
+  const savedAt = runtime.timerTransitionUpdatedAt
+    ? new Date(runtime.timerTransitionUpdatedAt).getTime()
+    : Number.NaN;
+  const savedSeconds =
+    runtime.timerTransitionSeconds ?? POMODORO_TRANSITION_SECONDS;
+  const elapsedSeconds = Number.isFinite(savedAt)
+    ? Math.max(0, Math.floor((Date.now() - savedAt) / 1000))
+    : 0;
+  const remainingSeconds = savedSeconds - elapsedSeconds;
+
+  if (remainingSeconds <= 0) return null;
+
+  return {
+    completedPhase:
+      runtime.timerTransitionCompletedPhase ??
+      (runtime.timerTransitionNextPhase === "focus" ? "rest" : "focus"),
+    nextPhase: runtime.timerTransitionNextPhase,
+    remainingSeconds,
+  };
+}
+
+function getExpiredStoredTransitionPhase(
+  runtime: WorkflowRuntime
+): PomodoroPhase | null {
+  if (!runtime.timerTransitionNextPhase) return null;
+
+  const savedAt = runtime.timerTransitionUpdatedAt
+    ? new Date(runtime.timerTransitionUpdatedAt).getTime()
+    : Number.NaN;
+
+  if (!Number.isFinite(savedAt)) return null;
+
+  const savedSeconds =
+    runtime.timerTransitionSeconds ?? POMODORO_TRANSITION_SECONDS;
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - savedAt) / 1000));
+
+  return elapsedSeconds >= savedSeconds ? runtime.timerTransitionNextPhase : null;
 }
 
 function getResolvedStoredTimer(runtime: WorkflowRuntime): PomodoroTimerState {
@@ -541,6 +707,7 @@ function WorkflowWorkspaceContent() {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const pomodoroAlarmRef = useRef<AudioContext | null>(null);
   const [workflowList] = useState(() => getStoredWorkflows());
   const activeWorkflowId =
     getWorkflowRouteTarget(workflowList, routeWorkflowId) ?? workflowList[0].id;
@@ -554,7 +721,21 @@ function WorkflowWorkspaceContent() {
     workflowRuntimeStorageKey,
     getDefaultRuntime(workflow)
   );
+  const storedPhaseTransition = getResolvedStoredTransition(storedRuntime);
+  const storedExpiredTransitionPhase =
+    getExpiredStoredTransitionPhase(storedRuntime);
   const storedTimer = getResolvedStoredTimer(storedRuntime);
+  const initialTimerPhase = storedExpiredTransitionPhase ?? storedTimer.phase;
+  const initialTimerSeconds = storedPhaseTransition
+    ? 0
+    : storedExpiredTransitionPhase
+      ? getTimerDurationSeconds(storedExpiredTransitionPhase, storedRuntime)
+      : storedTimer.remainingSeconds;
+  const initialTimerRunning = storedPhaseTransition
+    ? false
+    : storedExpiredTransitionPhase
+      ? storedRuntime.status === "active"
+      : storedTimer.running;
 
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [panState, setPanState] = useState<PanState | null>(null);
@@ -582,11 +763,11 @@ function WorkflowWorkspaceContent() {
   const [behaviourEvents, setBehaviourEvents] = useState(() =>
     isGuest ? [] : loadBehaviourEvents(activeUserId, workflow.id)
   );
-  const [timerPhase, setTimerPhase] = useState<PomodoroPhase>(storedTimer.phase);
-  const [timerSeconds, setTimerSeconds] = useState(
-    storedTimer.remainingSeconds
-  );
-  const [timerRunning, setTimerRunning] = useState(storedTimer.running);
+  const [timerPhase, setTimerPhase] = useState<PomodoroPhase>(initialTimerPhase);
+  const [timerSeconds, setTimerSeconds] = useState(initialTimerSeconds);
+  const [timerRunning, setTimerRunning] = useState(initialTimerRunning);
+  const [phaseTransition, setPhaseTransition] =
+    useState<PhaseTransitionState | null>(storedPhaseTransition);
 
   const [workflowRuntimeState, setWorkflowRuntimeState] = useState<{
     workflowId: string;
@@ -750,7 +931,21 @@ function WorkflowWorkspaceContent() {
         workflowRuntimeStorageKey,
         getDefaultRuntime(workflow)
       );
+      const nextTransition = getResolvedStoredTransition(nextRuntime);
+      const nextExpiredTransitionPhase =
+        getExpiredStoredTransitionPhase(nextRuntime);
       const nextTimer = getResolvedStoredTimer(nextRuntime);
+      const nextTimerPhase = nextExpiredTransitionPhase ?? nextTimer.phase;
+      const nextTimerSeconds = nextTransition
+        ? 0
+        : nextExpiredTransitionPhase
+          ? getTimerDurationSeconds(nextExpiredTransitionPhase, nextRuntime)
+          : nextTimer.remainingSeconds;
+      const nextTimerRunning = nextTransition
+        ? false
+        : nextExpiredTransitionPhase
+          ? nextRuntime.status === "active"
+          : nextTimer.running;
 
       setWorkflowRuntimeState({
         workflowId: workflow.id,
@@ -766,9 +961,10 @@ function WorkflowWorkspaceContent() {
       setEditingTodoId("");
       setSelectedTodoId("");
       setEditorPosition(null);
-      setTimerPhase(nextTimer.phase);
-      setTimerSeconds(nextTimer.remainingSeconds);
-      setTimerRunning(nextTimer.running);
+      setTimerPhase(nextTimerPhase);
+      setTimerSeconds(nextTimerSeconds);
+      setTimerRunning(nextTimerRunning);
+      setPhaseTransition(nextTransition);
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
@@ -791,11 +987,19 @@ function WorkflowWorkspaceContent() {
       ...runtime,
       timerPhase,
       timerSeconds,
-      timerRunning: runtime.status === "active" && timerRunning,
+      timerRunning:
+        runtime.status === "active" && timerRunning && phaseTransition === null,
       timerUpdatedAt: new Date().toISOString(),
+      timerTransitionNextPhase: phaseTransition?.nextPhase,
+      timerTransitionCompletedPhase: phaseTransition?.completedPhase,
+      timerTransitionSeconds: phaseTransition?.remainingSeconds,
+      timerTransitionUpdatedAt: phaseTransition
+        ? new Date().toISOString()
+        : undefined,
     });
   }, [
     runtime,
+    phaseTransition,
     timerPhase,
     timerRunning,
     timerSeconds,
@@ -813,7 +1017,38 @@ function WorkflowWorkspaceContent() {
   }, [lastCompletionTitle]);
 
   useEffect(() => {
-    if (!timerRunning || runtime.status !== "active") return;
+    if (!phaseTransition || runtime.status !== "active") return;
+
+    const intervalId = window.setInterval(() => {
+      setPhaseTransition((currentTransition) => {
+        if (!currentTransition) return null;
+
+        if (currentTransition.remainingSeconds > 1) {
+          return {
+            ...currentTransition,
+            remainingSeconds: currentTransition.remainingSeconds - 1,
+          };
+        }
+
+        setTimerPhase(currentTransition.nextPhase);
+        setTimerSeconds(getTimerDurationSeconds(currentTransition.nextPhase, runtime));
+        setTimerRunning(true);
+        setTaskomonNoticeState({
+          workflowId: workflow.id,
+          message:
+            currentTransition.nextPhase === "rest"
+              ? "Rest has started. Let the pause do its job."
+              : "Focus has started. Pick the next bubble when you are ready.",
+        });
+        return null;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [phaseTransition, runtime, workflow.id]);
+
+  useEffect(() => {
+    if (!timerRunning || runtime.status !== "active" || phaseTransition) return;
 
     const intervalId = window.setInterval(() => {
       setTimerSeconds((currentSeconds) => {
@@ -822,6 +1057,8 @@ function WorkflowWorkspaceContent() {
         }
 
         if (timerPhase === "focus") {
+          playPomodoroAlarm(pomodoroAlarmRef, "focus");
+
           if (!isGuest) {
             const timerEvent = appendBehaviourEvent({
               userId: activeUserId,
@@ -838,13 +1075,20 @@ function WorkflowWorkspaceContent() {
               [...currentEvents, timerEvent].slice(-500)
             );
           }
-          setTimerPhase("rest");
+          setTimerRunning(false);
+          setPhaseTransition({
+            completedPhase: "focus",
+            nextPhase: "rest",
+            remainingSeconds: POMODORO_TRANSITION_SECONDS,
+          });
           setTaskomonNoticeState({
             workflowId: workflow.id,
-            message: "Focus interval complete. Take the rest clock seriously.",
+            message: "Focus interval complete. Rest starts after a 15 second pause.",
           });
-          return runtime.restMinutes * 60;
+          return 0;
         }
+
+        playPomodoroAlarm(pomodoroAlarmRef, "rest");
 
         if (!isGuest) {
           const restEvent = appendBehaviourEvent({
@@ -862,12 +1106,17 @@ function WorkflowWorkspaceContent() {
             [...currentEvents, restEvent].slice(-500)
           );
         }
-        setTimerPhase("focus");
+        setTimerRunning(false);
+        setPhaseTransition({
+          completedPhase: "rest",
+          nextPhase: "focus",
+          remainingSeconds: POMODORO_TRANSITION_SECONDS,
+        });
         setTaskomonNoticeState({
           workflowId: workflow.id,
-          message: "Rest finished. Pick the next bubble when you are ready.",
+          message: "Rest finished. Focus starts after a 15 second pause.",
         });
-        return runtime.focusMinutes * 60;
+        return 0;
       });
     }, 1000);
 
@@ -880,6 +1129,7 @@ function WorkflowWorkspaceContent() {
     timerPhase,
     timerRunning,
     activeUserId,
+    phaseTransition,
     workflow.id,
   ]);
 
@@ -894,15 +1144,31 @@ function WorkflowWorkspaceContent() {
   const completionPercentage =
     todos.length === 0 ? 0 : Math.round((completedCount / todos.length) * 100);
   const focusTotalSeconds = runtime.focusMinutes * 60;
+  const restTotalSeconds = runtime.restMinutes * 60;
   const focusElapsedSeconds =
     timerPhase === "focus" ? focusTotalSeconds - timerSeconds : 0;
-  const timerProgress =
-    timerState.phase === "focus"
+  const displayTimerSeconds =
+    phaseTransition?.remainingSeconds ?? timerState.remainingSeconds;
+  const displayTimerPhase = phaseTransition ? "pause" : timerState.phase;
+  const displayTimerTitle = phaseTransition ? "Transition pause" : "Rest clock";
+  const displayTimerHint =
+    phaseTransition?.nextPhase === "rest"
+      ? "Rest starts next"
+      : phaseTransition?.nextPhase === "focus"
+        ? "Focus starts next"
+        : "";
+  const timerProgress = phaseTransition
+    ? clamp(
+        ((POMODORO_TRANSITION_SECONDS - phaseTransition.remainingSeconds) /
+          POMODORO_TRANSITION_SECONDS) *
+          100,
+        0,
+        100
+      )
+    : timerState.phase === "focus"
       ? clamp((focusElapsedSeconds / focusTotalSeconds) * 100, 0, 100)
       : clamp(
-          ((runtime.restMinutes * 60 - timerSeconds) /
-            (runtime.restMinutes * 60)) *
-            100,
+          ((restTotalSeconds - timerSeconds) / restTotalSeconds) * 100,
           0,
           100
         );
@@ -1417,13 +1683,14 @@ function WorkflowWorkspaceContent() {
       restMinutes: timerType === "rest" ? nextMinutes : currentRuntime.restMinutes,
     }));
 
-    if (timerPhase === timerType) {
+    if (timerPhase === timerType && !phaseTransition) {
       setTimerSeconds(nextMinutes * 60);
       setTimerRunning(false);
     }
   }
 
   function handleSetTimerPhase(phase: PomodoroPhase) {
+    setPhaseTransition(null);
     setTimerPhase(phase);
     setTimerSeconds(
       phase === "focus" ? runtime.focusMinutes * 60 : runtime.restMinutes * 60
@@ -1432,7 +1699,13 @@ function WorkflowWorkspaceContent() {
   }
 
   function handleToggleTimer() {
+    if (phaseTransition) return;
+
     const nextRunning = !timerRunning;
+
+    if (nextRunning) {
+      void primePomodoroAlarm(pomodoroAlarmRef);
+    }
 
     setTimerRunning(nextRunning);
     recordBehaviour(nextRunning ? "timer_started" : "timer_paused", undefined, {
@@ -1441,13 +1714,29 @@ function WorkflowWorkspaceContent() {
   }
 
   function handleResetTimer() {
+    setPhaseTransition(null);
     setTimerSeconds(
       timerPhase === "focus" ? runtime.focusMinutes * 60 : runtime.restMinutes * 60
     );
     setTimerRunning(false);
   }
 
+  function handleSkipTimer() {
+    if (phaseTransition) {
+      const nextPhase = phaseTransition.nextPhase;
+
+      setPhaseTransition(null);
+      setTimerPhase(nextPhase);
+      setTimerSeconds(getTimerDurationSeconds(nextPhase, runtime));
+      setTimerRunning(true);
+      return;
+    }
+
+    handleSetTimerPhase(timerState.phase === "focus" ? "rest" : "focus");
+  }
+
   function handleHoldWorkflow() {
+    setPhaseTransition(null);
     setTimerRunning(false);
     setRuntime((currentRuntime) => ({
       ...currentRuntime,
@@ -1471,6 +1760,7 @@ function WorkflowWorkspaceContent() {
   }
 
   function handleCompleteWorkflow() {
+    setPhaseTransition(null);
     setTimerRunning(false);
     setRuntime((currentRuntime) => ({
       ...currentRuntime,
@@ -1735,21 +2025,23 @@ function WorkflowWorkspaceContent() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
-                    Rest clock
+                    {displayTimerTitle}
                   </p>
                   <p className="mt-1 text-4xl font-black tracking-tight text-white">
-                    {formatClock(timerState.remainingSeconds)}
+                    {formatClock(displayTimerSeconds)}
                   </p>
                 </div>
                 <span
                   className={[
                     "rounded-full border px-3 py-1 text-[10px] font-black uppercase",
-                    timerState.phase === "focus"
+                    phaseTransition
+                      ? "border-amber-200/40 bg-amber-400/15 text-amber-100"
+                      : timerState.phase === "focus"
                       ? "border-orange-300/30 bg-orange-500/10 text-orange-100"
                       : "border-sky-300/30 bg-sky-500/10 text-sky-100",
                   ].join(" ")}
                 >
-                  {timerState.phase}
+                  {displayTimerPhase}
                 </span>
               </div>
 
@@ -1757,13 +2049,20 @@ function WorkflowWorkspaceContent() {
                 <div
                   className={[
                     "h-full rounded-full transition-all duration-300",
-                    timerState.phase === "focus"
+                    phaseTransition
+                      ? "bg-gradient-to-r from-amber-500 via-orange-300 to-yellow-100"
+                      : timerState.phase === "focus"
                       ? "bg-gradient-to-r from-red-500 via-orange-400 to-amber-200"
                       : "bg-gradient-to-r from-sky-500 via-cyan-300 to-emerald-200",
                   ].join(" ")}
                   style={{ width: `${timerProgress}%` }}
                 />
               </div>
+              {phaseTransition && (
+                <p className="mt-2 text-[10px] font-bold uppercase tracking-wide text-amber-100/55">
+                  {displayTimerHint}
+                </p>
+              )}
 
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <label className="grid gap-1 text-[9px] font-black uppercase tracking-wide text-orange-100/45">
@@ -1824,10 +2123,18 @@ function WorkflowWorkspaceContent() {
               <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-2">
                 <button
                   onClick={handleToggleTimer}
-                  disabled={runtime.status === "held" || runtime.status === "completed"}
+                  disabled={
+                    runtime.status === "held" ||
+                    runtime.status === "completed" ||
+                    phaseTransition !== null
+                  }
                   className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black uppercase text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {timerState.running ? "Pause" : "Start"}
+                  {phaseTransition
+                    ? "Pausing"
+                    : timerState.running
+                      ? "Pause"
+                      : "Start"}
                 </button>
                 <button
                   onClick={handleResetTimer}
@@ -1836,14 +2143,10 @@ function WorkflowWorkspaceContent() {
                   Reset
                 </button>
                 <button
-                  onClick={
-                    timerState.phase === "focus"
-                      ? () => handleSetTimerPhase("rest")
-                      : () => handleSetTimerPhase("focus")
-                  }
+                  onClick={handleSkipTimer}
                   className="rounded-xl border border-sky-300/25 bg-sky-500/10 px-3 py-2 text-xs font-black uppercase text-sky-100 transition hover:bg-sky-500/20"
                 >
-                  Skip
+                  {phaseTransition ? "Skip pause" : "Skip"}
                 </button>
               </div>
 

@@ -18,6 +18,10 @@ export type WorkflowRuntimeSummary = Pick<
   timerSeconds?: number;
   timerRunning?: boolean;
   timerUpdatedAt?: string;
+  timerTransitionNextPhase?: PomodoroPhase;
+  timerTransitionCompletedPhase?: PomodoroPhase;
+  timerTransitionSeconds?: number;
+  timerTransitionUpdatedAt?: string;
 };
 
 export function getActiveWorkspaceUserId(userId?: string) {

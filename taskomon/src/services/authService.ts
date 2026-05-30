@@ -64,7 +64,7 @@ export function loginLocal(email: string, password: string): AppSession {
   );
 
   if (!user || user.password !== password) {
-    throw new Error("Email or password is not right for local demo mode.");
+    throw new Error("Email/password is not right.");
   }
 
   const session: AppSession = {
