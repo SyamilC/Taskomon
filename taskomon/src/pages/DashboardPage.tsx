@@ -3,11 +3,12 @@ import { Link } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
 import {
   DEMO_USER_ID,
-  demoBehaviourEvents,
-  demoTaskomonComments,
-  demoTaskomonState,
   demoTodos,
 } from "../data/demoData";
+import {
+  createBehaviourSnapshot,
+  loadBehaviourEvents,
+} from "../services/behaviourService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import {
   applyHabitAutoReset,
@@ -23,10 +24,19 @@ import {
   saveStoredWorkflows,
 } from "../services/workspaceStorage";
 import type { WorkflowRuntimeSummary } from "../services/workspaceStorage";
-import type { Habit, Heaviness, Priority, Todo, TodoStatus, Workflow } from "../types";
+import type {
+  BehaviourEvent,
+  Habit,
+  Heaviness,
+  Priority,
+  Todo,
+  TodoStatus,
+  Workflow,
+} from "../types";
 import NavBar from "./NavBar";
 
 const PREVIEW_BUBBLE_HEIGHT = 96;
+
 const PRIORITY_PREVIEW_STYLE: Record<
   Priority,
   { label: string; badge: string; dot: string; widthBoost: number; heightBoost: number }
@@ -53,6 +63,7 @@ const PRIORITY_PREVIEW_STYLE: Record<
     heightBoost: 12,
   },
 };
+
 const HEAVINESS_PREVIEW_STYLE: Record<
   Heaviness,
   { label: string; badge: string; ring: string; stripe: string; heightBoost: number }
@@ -149,6 +160,150 @@ function isTodoLate(todo: Todo) {
   );
 }
 
+function isTodoDueSoon(todo: Todo) {
+  const dueMinutes = getDueMinutes(todo);
+  if (
+    todo.status === "done" ||
+    todo.dueMode === "anytime" ||
+    dueMinutes === null
+  ) {
+    return false;
+  }
+
+  const minutesUntilDue = dueMinutes - getNowMinutes();
+
+  return minutesUntilDue >= 0 && minutesUntilDue <= 90;
+}
+
+function getDueText(todo: Todo) {
+  if (!todo.dueTime) return "soon";
+
+  return `${todo.dueMode === "at_time" ? "at" : "by"} ${todo.dueTime}`;
+}
+
+function getStableThoughtIndex(seed: string, total: number) {
+  let hash = 0;
+
+  for (const character of seed) {
+    hash = (hash * 31 + character.charCodeAt(0)) % 2147483647;
+  }
+
+  return total === 0 ? 0 : hash % total;
+}
+
+function getDashboardThought(input: {
+  events: BehaviourEvent[];
+  monitoredTodos: Todo[];
+  completedTodos: number;
+  inProgressTodos: number;
+  heavyTodos: number;
+  heldWorkflowCount: number;
+  completedHabitCount: number;
+  activeTodo?: Todo;
+}) {
+  const candidates = [
+    "I am doing a tiny patrol around the bubbles. Nothing dramatic, just keeping the desk from getting too foggy.",
+    "Small starts still count. I am mostly here to make the first bubble feel less annoying.",
+    "The workspace feels better when one bubble is allowed to be the main character for a while.",
+    "I am watching for patterns, not judging them. A slow patch is data, not a disaster.",
+  ];
+  const latestEvent = input.events.find(
+    (event) =>
+      event.type !== "workspace_opened" && event.type !== "workspace_closed"
+  );
+  const latestEventTodo = input.monitoredTodos.find(
+    (todo) => todo.id === latestEvent?.todoId
+  );
+
+  if (latestEvent?.type === "todo_completed") {
+    candidates.push(
+      latestEventTodo
+        ? `I noticed "${latestEventTodo.title}" got cleared. That kind of clean finish makes the board easier to breathe around.`
+        : "I noticed a bubble got cleared recently. The board is a little lighter now."
+    );
+  }
+
+  if (latestEvent?.type === "todo_moved") {
+    candidates.push(
+      "You moved a bubble recently. Repositioning things is usually the brain quietly negotiating the plan."
+    );
+  }
+
+  if (latestEvent?.type === "timer_started") {
+    candidates.push(
+      "The timer started recently. I like that move: it gives the bubble a little fence instead of an endless field."
+    );
+  }
+
+  if (latestEvent?.type === "rest_taken") {
+    candidates.push(
+      "A rest interval showed up in the records. Good, the system works better when recovery is part of the plan."
+    );
+  }
+
+  if (latestEvent?.type === "advice_requested") {
+    candidates.push(
+      "You asked for advice recently. I am storing that as curiosity, which is secretly a productivity tool."
+    );
+  }
+
+  if (input.activeTodo) {
+    candidates.push(
+      `"${input.activeTodo.title}" is active. I am watching the rhythm, but I am not going to shout unless the board gets weird.`
+    );
+  }
+
+  if (input.inProgressTodos > 1) {
+    candidates.push(
+      `${input.inProgressTodos} bubbles are in progress. That can work, but one clean finish would calm the board down.`
+    );
+  }
+
+  if (input.heavyTodos > 0) {
+    candidates.push(
+      `${input.heavyTodos} heavy bubble${input.heavyTodos > 1 ? "s" : ""} on the board. Heavy does not mean urgent; it means worth slicing carefully.`
+    );
+  }
+
+  if (input.completedTodos > 0) {
+    candidates.push(
+      `${input.completedTodos} bubble${input.completedTodos > 1 ? "s" : ""} cleared across the monitored spaces. That is real movement.`
+    );
+  }
+
+  if (input.completedHabitCount > 0) {
+    candidates.push(
+      `${input.completedHabitCount} habit space${input.completedHabitCount > 1 ? "s" : ""} look fully clear. The routine is getting some shape.`
+    );
+  }
+
+  if (input.heldWorkflowCount > 0) {
+    candidates.push(
+      `${input.heldWorkflowCount} workflow${input.heldWorkflowCount > 1 ? "s are" : " is"} on hold, so I am leaving those bubbles alone for now.`
+    );
+  }
+
+  const now = new Date();
+  const seed = [
+    now.toDateString(),
+    now.getHours(),
+    Math.floor(now.getMinutes() / 10),
+    input.events.length,
+    input.completedTodos,
+    input.inProgressTodos,
+    input.heavyTodos,
+  ].join(":");
+
+  return candidates[getStableThoughtIndex(seed, candidates.length)];
+}
+
+function formatPatternLabel(pattern: string) {
+  return pattern
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
   return todo.dependencyIds.some((dependencyId) => {
     const dependency = allTodos.find((item) => item.id === dependencyId);
@@ -162,10 +317,6 @@ function getTodoProgress(todos: Todo[]) {
   return Math.round(
     (todos.filter((todo) => todo.status === "done").length / todos.length) * 100
   );
-}
-
-function clampScore(value: number) {
-  return Math.max(0, Math.min(100, value));
 }
 
 function getWorkflowTodos(workflow: Workflow) {
@@ -389,14 +540,8 @@ function HabitCard({
 
 function TaskomonMoodPanel({
   thought,
-  focusScore,
-  fatigueScore,
-  consistencyScore,
 }: {
   thought: string;
-  focusScore: number;
-  fatigueScore: number;
-  consistencyScore: number;
 }) {
   return (
     <Panel title="Taskomon">
@@ -415,22 +560,6 @@ function TaskomonMoodPanel({
           </p>
         </div>
       </div>
-
-      <div className="mt-5 grid gap-3.5">
-        {[
-          { title: "Focus", val: focusScore },
-          { title: "Fatigue", val: fatigueScore },
-          { title: "Consistency", val: consistencyScore },
-        ].map((attr) => (
-          <div key={attr.title}>
-            <div className="mb-1.5 flex justify-between text-[11px] font-bold">
-              <span className="text-orange-100/55">{attr.title}</span>
-              <span className="font-black text-neutral-200">{attr.val}%</span>
-            </div>
-            <ProgressBar value={attr.val} />
-          </div>
-        ))}
-      </div>
     </Panel>
   );
 }
@@ -441,7 +570,8 @@ type DashboardModal =
   | { type: "edit-habit"; id: string }
   | { type: "edit-workflow"; id: string }
   | { type: "delete-habit"; id: string }
-  | { type: "delete-workflow"; id: string };
+  | { type: "delete-workflow"; id: string }
+  | { type: "report" };
 
 type WorkspaceFormState = {
   title: string;
@@ -498,25 +628,42 @@ function DashboardPage() {
     const habitTodos = habitTodoMap.get(habit.id) ?? [];
     const completed = habitTodos.filter((todo) => todo.status === "done").length;
     const late = habitTodos.filter(isTodoLate).length;
+    const dueSoon = habitTodos.filter(isTodoDueSoon).length;
     const blocked = habitTodos.filter((todo) => isTodoBlocked(todo, habitTodos)).length;
+    const unfinished = habitTodos.filter((todo) => todo.status !== "done").length;
     const nextDue = habitTodos
       .filter((todo) => todo.status !== "done" && todo.dueMode !== "anytime")
       .sort((a, b) => (getDueMinutes(a) ?? 9999) - (getDueMinutes(b) ?? 9999))[0];
+    const progress = getTodoProgress(habitTodos);
+    const attentionScore =
+      late * 120 +
+      blocked * 70 +
+      dueSoon * 45 +
+      unfinished * 12 +
+      Math.max(0, 100 - progress);
 
     return {
       habit,
       todos: habitTodos,
       completed,
       late,
+      dueSoon,
       blocked,
-      progress: getTodoProgress(habitTodos),
+      unfinished,
+      nextDue,
+      progress,
+      attentionScore,
       notice: late
         ? `${late} timed bubble${late > 1 ? "s" : ""} late`
         : blocked
         ? `${blocked} dependency wait${blocked > 1 ? "s" : ""}`
+        : dueSoon
+        ? `${dueSoon} timed bubble${dueSoon > 1 ? "s" : ""} soon`
         : nextDue
-        ? `Next: ${nextDue.title}`
-        : "No timed bubbles left",
+        ? `Next: ${nextDue.title} ${getDueText(nextDue)}`
+        : unfinished
+        ? `${unfinished} bubble${unfinished > 1 ? "s" : ""} left`
+        : "All clear",
     };
   });
 
@@ -535,73 +682,119 @@ function DashboardPage() {
     };
   });
 
-  const allTodos = [
-    ...workflowSummaries.flatMap((summary) => summary.todos),
+  const monitoredWorkflowSummaries = workflowSummaries.filter(
+    (summary) => summary.runtime.status !== "held"
+  );
+  const behaviourEvents = [
+    ...habitSummaries.flatMap((summary) =>
+      loadBehaviourEvents(DEMO_USER_ID, summary.habit.id)
+    ),
+    ...monitoredWorkflowSummaries.flatMap((summary) =>
+      loadBehaviourEvents(DEMO_USER_ID, summary.workflow.id)
+    ),
+    ...loadBehaviourEvents(DEMO_USER_ID),
+  ].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+  const monitoredTodos = [
+    ...monitoredWorkflowSummaries.flatMap((summary) => summary.todos),
     ...habitSummaries.flatMap((summary) => summary.todos),
   ];
-  const previewTodos = [...allTodos]
+  const behaviourSnapshot = createBehaviourSnapshot({
+    todos: monitoredTodos,
+    events: behaviourEvents,
+  });
+  const blockedTodos = [
+    ...monitoredWorkflowSummaries.flatMap((summary) =>
+      summary.todos.filter((todo) => isTodoBlocked(todo, summary.todos))
+    ),
+    ...habitSummaries.flatMap((summary) =>
+      summary.todos.filter((todo) => isTodoBlocked(todo, summary.todos))
+    ),
+  ];
+  const previewTodos = [...monitoredTodos]
     .filter((todo) => todo.status !== "done")
     .sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     )
     .slice(0, 1);
-  const completedTodos = allTodos.filter((todo) => todo.status === "done").length;
-  const inProgressTodos = allTodos.filter(
+  const completedTodos = monitoredTodos.filter(
+    (todo) => todo.status === "done"
+  ).length;
+  const inProgressTodos = monitoredTodos.filter(
     (todo) => todo.status === "in_progress"
   ).length;
-  const heavyTodos = allTodos.filter((todo) => todo.heaviness === "heavy").length;
-  const lateTodos = allTodos.filter(isTodoLate);
-  const blockedTodos = allTodos.filter((todo) => isTodoBlocked(todo, allTodos));
-  const activeTodo = allTodos.find((todo) => todo.status === "in_progress");
-  const heavyActiveTodo = allTodos.find(
-    (todo) => todo.status === "in_progress" && todo.heaviness === "heavy"
+  const heavyTodos = monitoredTodos.filter(
+    (todo) => todo.heaviness === "heavy"
+  ).length;
+  const lateTodos = habitSummaries.flatMap((summary) =>
+    summary.todos.filter(isTodoLate)
   );
+  const activeTodo = monitoredTodos.find((todo) => todo.status === "in_progress");
+  const attentionHabit = [...habitSummaries].sort(
+    (a, b) => b.attentionScore - a.attentionScore
+  )[0];
+  const dashboardNotice = attentionHabit
+    ? attentionHabit.late
+      ? {
+          title: "Habit needs attention",
+          message: `"${attentionHabit.habit.title}" has ${attentionHabit.late} late timed bubble${attentionHabit.late > 1 ? "s" : ""}. Open it and clear the most realistic one first.`,
+          openTo: `/habit/${attentionHabit.habit.id}`,
+        }
+      : attentionHabit.blocked
+      ? {
+          title: "Habit dependency notice",
+          message: `"${attentionHabit.habit.title}" has ${attentionHabit.blocked} blocked bubble${attentionHabit.blocked > 1 ? "s" : ""}. Follow the line to the prerequisite bubble.`,
+          openTo: `/habit/${attentionHabit.habit.id}`,
+        }
+      : attentionHabit.dueSoon
+      ? {
+          title: "Habit timing notice",
+          message: `"${attentionHabit.habit.title}" has a timed bubble coming up. ${
+            attentionHabit.nextDue
+              ? `"${attentionHabit.nextDue.title}" is due ${getDueText(attentionHabit.nextDue)}.`
+              : "Check the next timed bubble."
+          }`,
+          openTo: `/habit/${attentionHabit.habit.id}`,
+        }
+      : attentionHabit.unfinished
+      ? {
+          title: "Habit notice",
+          message: `"${attentionHabit.habit.title}" needs the most attention right now with ${attentionHabit.unfinished} open bubble${attentionHabit.unfinished > 1 ? "s" : ""}.`,
+          openTo: `/habit/${attentionHabit.habit.id}`,
+        }
+      : {
+          title: "Habit status",
+          message: "No urgent habit notices right now. Your habit workspaces are clear.",
+          openTo: "/habits",
+        }
+    : {
+        title: "Habit status",
+        message: "No active habits yet. Add one when you are ready to track a rhythm.",
+        openTo: "/dashboard",
+      };
   const rhythmStatus = lateTodos.length
     ? "Needs check"
     : blockedTodos.length
     ? "Blocked"
     : activeTodo
     ? "In flow"
+    : attentionHabit?.unfinished
+    ? "Ready"
     : "Stable";
-  const taskomonThought = lateTodos[0]
-    ? `${lateTodos[0].title} is past its planned time. Adjust the habit or clear it gently.`
-    : blockedTodos[0]
-    ? `${blockedTodos[0].title} is blocked by a dependency line.`
-    : heavyActiveTodo
-    ? `${heavyActiveTodo.title} is heavy and currently active. Watch for slowdown.`
-    : activeTodo
-    ? `${activeTodo.title} is the current bubble. Keep the pace steady.`
-    : demoTaskomonState.thought;
-  const focusScore = clampScore(
-    demoTaskomonState.focusScore + completedTodos * 3 - lateTodos.length * 7
-  );
-  const fatigueScore = clampScore(
-    demoTaskomonState.fatigueScore + heavyTodos * 4 + lateTodos.length * 6
-  );
-  const consistencyScore = clampScore(
-    demoTaskomonState.consistencyScore +
-      habitSummaries.filter((summary) => summary.progress === 100).length * 8 -
-      lateTodos.length * 5
-  );
-  const dashboardNotice = lateTodos[0]
-    ? {
-        title: "Habit timing notice",
-        message: `"${lateTodos[0].title}" is past its planned time. Review the habit workspace and either finish it or move the timing.`,
-      }
-    : blockedTodos[0]
-    ? {
-        title: "Dependency notice",
-        message: `"${blockedTodos[0].title}" is waiting on another bubble. Follow the line and clear the prerequisite first.`,
-      }
-    : heavyActiveTodo
-    ? {
-        title: "Taskomon intercept alert",
-        message: `"${heavyActiveTodo.title}" is marked heavy and in progress. If the pace slows, split it into a smaller bubble or take a rest.`,
-      }
-    : {
-        title: "Taskomon status",
-        message: "No urgent habit notices right now. Your workspace shell is ready for the next check.",
-      };
+  const taskomonThought = getDashboardThought({
+    events: behaviourEvents,
+    monitoredTodos,
+    completedTodos,
+    inProgressTodos,
+    heavyTodos,
+    heldWorkflowCount:
+      workflowSummaries.length - monitoredWorkflowSummaries.length,
+    completedHabitCount: habitSummaries.filter(
+      (summary) => summary.progress === 100
+    ).length,
+    activeTodo,
+  });
   const modalHabit =
     modal && "id" in modal && modal.type.includes("habit")
       ? habits.find((habit) => habit.id === modal.id)
@@ -629,6 +822,8 @@ function DashboardPage() {
       ? "Set Workflow"
       : modal?.type === "delete-workflow"
       ? "Delete Workflow"
+      : modal?.type === "report"
+      ? "Behaviour Report"
       : "";
 
   function openCreateHabitModal() {
@@ -768,6 +963,9 @@ function DashboardPage() {
         status: nextWorkflow.status,
         focusMinutes,
         restMinutes,
+        timerPhase: "focus",
+        timerSeconds: focusMinutes * 60,
+        timerRunning: false,
         updatedAt: now,
       });
       closeModal();
@@ -958,10 +1156,10 @@ function DashboardPage() {
                       </p>
                       <div className="mt-4 flex flex-wrap gap-2">
                         <Link
-                          to={heavyActiveTodo ? "/workflow" : "/habit"}
+                          to={dashboardNotice.openTo}
                           className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black text-white transition hover:brightness-110"
                         >
-                          {heavyActiveTodo ? "Open workflow" : "Open habit"}
+                          Open notice
                         </Link>
                         <Link
                           to="/advice"
@@ -982,7 +1180,11 @@ function DashboardPage() {
                   <MiniStat
                     label="Rhythm Status"
                     value={rhythmStatus}
-                    note={`${demoBehaviourEvents.length} behaviour events tracked`}
+                    note={
+                      monitoredWorkflowSummaries.length === workflowSummaries.length
+                        ? "Active habits and workflows watched"
+                        : "Held workflows ignored"
+                    }
                   />
                 </div>
 
@@ -1116,12 +1318,7 @@ function DashboardPage() {
 
               {/* Auxiliary Monitor Sidebar Panel */}
               <aside className="flex flex-col gap-6">
-                <TaskomonMoodPanel
-                  thought={taskomonThought}
-                  focusScore={focusScore}
-                  fatigueScore={fatigueScore}
-                  consistencyScore={consistencyScore}
-                />
+                <TaskomonMoodPanel thought={taskomonThought} />
 
                 <Panel title="Habit Analysis Report">
                   <div className="grid gap-2.5">
@@ -1148,24 +1345,6 @@ function DashboardPage() {
                   </div>
                 </Panel>
 
-                <Panel title="Taskomon Analysis">
-                  <div className="flex flex-col gap-2.5">
-                    {demoTaskomonComments.map((comment) => (
-                      <div
-                        key={comment.id}
-                        className="rounded-2xl border border-orange-950/40 bg-[#15100f] p-3 shadow-sm"
-                      >
-                        <span className="text-[9px] font-black uppercase tracking-widest text-orange-400">
-                          [{comment.mood}]
-                        </span>
-                        <p className="mt-1 text-xs font-medium leading-relaxed text-orange-100/70">
-                          {comment.message}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </Panel>
-
                 <Panel title="Navigate">
                   <div className="grid gap-2">
                     <button
@@ -1180,12 +1359,12 @@ function DashboardPage() {
                     >
                       + Add Habit
                     </button>
-                    <Link
-                      to="/advice"
+                    <button
+                      onClick={() => setModal({ type: "report" })}
                       className="rounded-xl border border-orange-950/60 bg-[#15100f] px-4 py-3 text-left text-xs font-black tracking-wide uppercase text-orange-100/60 transition hover:border-orange-500/30 hover:text-orange-100"
                     >
                       ? Request Report
-                    </Link>
+                    </button>
                   </div>
                 </Panel>
               </aside>
@@ -1199,7 +1378,7 @@ function DashboardPage() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-300">
-                  Dashboard setup
+                  Report Analysis
                 </p>
                 <h3 className="mt-1 text-lg font-black text-white">{modalTitle}</h3>
               </div>
@@ -1211,7 +1390,93 @@ function DashboardPage() {
               </button>
             </div>
 
-            {modalIsDelete ? (
+            {modal?.type === "report" ? (
+              <div className="mt-5 grid gap-4">
+                <div className="rounded-2xl border border-orange-950/50 bg-[#0c0908] p-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
+                    Prototype analysis
+                  </p>
+                  <p className="mt-2 text-sm font-semibold leading-relaxed text-orange-50/75">
+                    This report is generated from stored behaviour events and
+                    currently monitored todos. Held workflows are ignored.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    ["Completion", `${behaviourSnapshot.completionRate}%`],
+                    ["Momentum", `${behaviourSnapshot.momentumScore}%`],
+                    ["Fatigue", `${behaviourSnapshot.fatigueScore}%`],
+                    ["Avoidance", `${behaviourSnapshot.avoidanceScore}%`],
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-2xl border border-orange-950/50 bg-[#16100f] p-3"
+                    >
+                      <p className="text-[9px] font-black uppercase tracking-wide text-orange-100/35">
+                        {label}
+                      </p>
+                      <p className="mt-1 text-xl font-black text-orange-50">
+                        {value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-2xl border border-sky-300/15 bg-[#10161d] p-4">
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-sky-200">
+                    Behaviour notes
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {behaviourSnapshot.detectedPatterns.length > 0 ? (
+                      behaviourSnapshot.detectedPatterns.map((pattern) => (
+                        <span
+                          key={pattern}
+                          className="rounded-full border border-sky-300/20 bg-sky-500/10 px-3 py-1 text-[10px] font-black uppercase text-sky-100"
+                        >
+                          {formatPatternLabel(pattern)}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs font-semibold text-sky-100/55">
+                        No strong pattern detected yet.
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-2 text-xs font-semibold text-orange-50/70">
+                  <p>
+                    {behaviourSnapshot.completedTodos}/
+                    {behaviourSnapshot.totalTodos} monitored bubbles are done.
+                  </p>
+                  <p>
+                    {behaviourSnapshot.highPriorityUnfinishedCount} high
+                    priority bubble
+                    {behaviourSnapshot.highPriorityUnfinishedCount === 1
+                      ? ""
+                      : "s"}{" "}
+                    still need attention.
+                  </p>
+                  <p>
+                    {behaviourSnapshot.heavyCompletedCount}/
+                    {behaviourSnapshot.heavyTaskCount} heavy bubbles are clear.
+                  </p>
+                  {behaviourSnapshot.averageCompletionMinutes !== undefined && (
+                    <p>
+                      Average completion time is about{" "}
+                      {behaviourSnapshot.averageCompletionMinutes} minutes.
+                    </p>
+                  )}
+                  {behaviourSnapshot.currentTaskMinutes !== undefined && (
+                    <p>
+                      Current active task has been running about{" "}
+                      {behaviourSnapshot.currentTaskMinutes} minutes.
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : modalIsDelete ? (
               <div className="mt-5">
                 <p className="text-sm font-semibold leading-relaxed text-orange-50/80">
                   Delete{" "}

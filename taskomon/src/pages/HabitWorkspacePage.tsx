@@ -1,21 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import taskomonFrontFaceImage from "../assets/taskomon/Taskomon-FrontFace.png";
+import taskomonHappyImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
+import taskomonThinkingImage from "../assets/taskomon/Taskomon-Icon-Thinking.png";
+import taskomonTiredImage from "../assets/taskomon/Taskomon-Icon-Tired.png";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoTodos } from "../data/demoData";
+import { DEMO_USER_ID, demoTodos } from "../data/demoData";
+import {
+  appendBehaviourEvent,
+  loadBehaviourEvents,
+} from "../services/behaviourService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import {
+  createBehaviourSnapshot,
+  getTaskomonComment,
+  getTaskomonMood,
+  getTaskomonMoodStyle,
+} from "../services/taskomonEngine";
+import {
   applyHabitAutoReset,
+  getHabitTodoStorageKey,
   getStoredHabits,
   saveStoredHabits,
 } from "../services/workspaceStorage";
-import type { DueMode, Habit, Heaviness, Priority, Todo, TodoStatus } from "../types";
+import type {
+  BehaviourEventType,
+  DueMode,
+  Habit,
+  Heaviness,
+  Priority,
+  TaskomonMood,
+  Todo,
+  TodoStatus,
+} from "../types";
 import NavBar from "./NavBar";
 
 type DragState = {
   todoId: string;
   offsetX: number;
   offsetY: number;
+  startX: number;
+  startY: number;
 };
 
 type PanState = {
@@ -41,9 +67,16 @@ type EditorDragState = {
 const BASE_BUBBLE_HEIGHT = 128;
 const WORLD_WIDTH = 2800;
 const WORLD_HEIGHT = 1800;
-const HABIT_STORAGE_PREFIX = "taskomon:habit";
-const LAST_OPENED_HABIT_KEY = "taskomon:lastOpenedHabitId";
-const DEFAULT_DUE_TIME = "18:00";
+
+const TASKOMON_MOOD_IMAGE: Record<TaskomonMood, string> = {
+  neutral: taskomonFrontFaceImage,
+  happy: taskomonHappyImage,
+  focused: taskomonThinkingImage,
+  worried: taskomonThinkingImage,
+  tired: taskomonTiredImage,
+  proud: taskomonHappyImage,
+};
+
 const PRIORITY_STYLE: Record<
   Priority,
   {
@@ -80,6 +113,7 @@ const PRIORITY_STYLE: Record<
     heightBoost: 18,
   },
 };
+
 const HEAVINESS_STYLE: Record<
   Heaviness,
   {
@@ -117,11 +151,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function getBubbleDimensions(todo: Pick<Todo, "title" | "priority" | "heaviness">) {
+function getBubbleDimensions(
+  todo: Pick<Todo, "title" | "priority" | "heaviness">
+) {
   const priority = todo.priority ?? "medium";
   const heaviness = todo.heaviness ?? "medium";
-  const titleLength = todo.title.trim().length;
-  const titleBoost = Math.max(0, titleLength - 14) * 5.5;
+  const titleBoost = Math.max(0, todo.title.trim().length - 14) * 5.5;
   const width = clamp(
     138 + PRIORITY_STYLE[priority].widthBoost + titleBoost,
     126,
@@ -148,7 +183,10 @@ function getBubbleCenter(todo: Todo) {
   };
 }
 
-function getEdgePoint(from: ReturnType<typeof getBubbleCenter>, to: ReturnType<typeof getBubbleCenter>) {
+function getEdgePoint(
+  from: ReturnType<typeof getBubbleCenter>,
+  to: ReturnType<typeof getBubbleCenter>
+) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
 
@@ -166,9 +204,75 @@ function getEdgePoint(from: ReturnType<typeof getBubbleCenter>, to: ReturnType<t
   };
 }
 
-function getHabitTodoStorageKey(habitId: string) {
-  return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
+function getNextStatus(status: TodoStatus): TodoStatus {
+  if (status === "not_started") return "in_progress";
+  if (status === "in_progress") return "done";
+  return "not_started";
 }
+
+function getStatusLabel(status: TodoStatus) {
+  if (status === "not_started") return "Not Started";
+  if (status === "in_progress") return "Doing";
+  return "Done";
+}
+
+function getBubbleTheme(status: TodoStatus) {
+  if (status === "done") {
+    return {
+      shell:
+        "border-emerald-300/75 bg-emerald-500/22 shadow-[0_0_34px_rgba(16,185,129,0.22)]",
+      glow: "bg-emerald-300/28",
+      label: "text-emerald-50 border-emerald-200/45 bg-emerald-400/18",
+    };
+  }
+
+  if (status === "in_progress") {
+    return {
+      shell:
+        "border-orange-300/80 bg-orange-500/22 shadow-[0_0_38px_rgba(249,115,22,0.26)]",
+      glow: "bg-orange-300/30",
+      label: "text-orange-50 border-orange-200/50 bg-orange-400/18",
+    };
+  }
+
+  return {
+    shell:
+      "border-rose-300/45 bg-rose-500/14 shadow-[0_0_28px_rgba(244,63,94,0.12)]",
+    glow: "bg-rose-300/16",
+    label: "text-rose-50/80 border-rose-200/30 bg-rose-400/12",
+  };
+}
+
+function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
+  return todo.dependencyIds.some((dependencyId) => {
+    const dependency = allTodos.find((item) => item.id === dependencyId);
+    return dependency && dependency.status !== "done";
+  });
+}
+
+function wouldCreateDependencyCycle(
+  todoId: string,
+  dependencyId: string,
+  allTodos: Todo[]
+) {
+  const visited = new Set<string>();
+
+  function dependencyChainContains(currentId: string): boolean {
+    if (currentId === todoId) return true;
+    if (visited.has(currentId)) return false;
+
+    visited.add(currentId);
+    const currentTodo = allTodos.find((todo) => todo.id === currentId);
+    if (!currentTodo) return false;
+
+    return currentTodo.dependencyIds.some(dependencyChainContains);
+  }
+
+  return dependencyChainContains(dependencyId);
+}
+
+const LAST_OPENED_HABIT_KEY = "taskomon:lastOpenedHabitId";
+const DEFAULT_DUE_TIME = "18:00";
 
 function getInitialHabitTodos(habitId: string) {
   const habitTodos = demoTodos.filter(
@@ -239,13 +343,6 @@ function isTodoSoon(todo: Todo) {
   return diff >= 0 && diff <= 60;
 }
 
-function isTodoBlocked(todo: Todo, allTodos: Todo[]) {
-  return todo.dependencyIds.some((dependencyId) => {
-    const dependency = allTodos.find((item) => item.id === dependencyId);
-    return dependency && dependency.status !== "done";
-  });
-}
-
 function getHabitAttentionScore(habit: Habit) {
   const storedTodos = loadFromStorage<Todo[]>(
     getHabitTodoStorageKey(habit.id),
@@ -291,66 +388,6 @@ function getHabitRouteTarget(habits: Habit[], routeHabitId?: string) {
   }
 
   return getMostAttentionHabitId(habits) ?? habits[0]?.id;
-}
-
-function wouldCreateDependencyCycle(
-  todoId: string,
-  dependencyId: string,
-  allTodos: Todo[]
-) {
-  const visited = new Set<string>();
-
-  function dependencyChainContains(currentId: string): boolean {
-    if (currentId === todoId) return true;
-    if (visited.has(currentId)) return false;
-
-    visited.add(currentId);
-    const currentTodo = allTodos.find((todo) => todo.id === currentId);
-    if (!currentTodo) return false;
-
-    return currentTodo.dependencyIds.some(dependencyChainContains);
-  }
-
-  return dependencyChainContains(dependencyId);
-}
-
-function getNextStatus(status: TodoStatus): TodoStatus {
-  if (status === "not_started") return "in_progress";
-  if (status === "in_progress") return "done";
-  return "not_started";
-}
-
-function getStatusLabel(status: TodoStatus) {
-  if (status === "not_started") return "Not Started";
-  if (status === "in_progress") return "Doing";
-  return "Done";
-}
-
-function getBubbleTheme(status: TodoStatus) {
-  if (status === "done") {
-    return {
-      shell:
-        "border-emerald-300/75 bg-emerald-500/22 shadow-[0_0_34px_rgba(16,185,129,0.22)]",
-      glow: "bg-emerald-300/28",
-      label: "text-emerald-50 border-emerald-200/45 bg-emerald-400/18",
-    };
-  }
-
-  if (status === "in_progress") {
-    return {
-      shell:
-        "border-orange-300/80 bg-orange-500/22 shadow-[0_0_38px_rgba(249,115,22,0.26)]",
-      glow: "bg-orange-300/30",
-      label: "text-orange-50 border-orange-200/50 bg-orange-400/18",
-    };
-  }
-
-  return {
-    shell:
-      "border-rose-300/45 bg-rose-500/14 shadow-[0_0_28px_rgba(244,63,94,0.12)]",
-    glow: "bg-rose-300/16",
-    label: "text-rose-50/80 border-rose-200/30 bg-rose-400/12",
-  };
 }
 
 function HabitBubble({
@@ -541,6 +578,9 @@ function HabitWorkspacePage() {
     message: "",
   });
   const [lastCompletionTitle, setLastCompletionTitle] = useState("");
+  const [behaviourEvents, setBehaviourEvents] = useState(() =>
+    loadBehaviourEvents(DEMO_USER_ID, habit.id)
+  );
 
   const [todoState, setTodoState] = useState<{
     habitId: string;
@@ -562,6 +602,38 @@ function HabitWorkspacePage() {
 
   function setTaskomonNotice(message: string) {
     setTaskomonNoticeState({ habitId: habit.id, message });
+  }
+
+  function recordBehaviour(
+    type: BehaviourEventType,
+    todo?: Todo,
+    metadata: {
+      timeSpentSeconds?: number;
+      previousStatus?: TodoStatus;
+      newStatus?: TodoStatus;
+      priority?: Priority;
+      heaviness?: Heaviness;
+      dueMode?: DueMode;
+      note?: string;
+    } = {}
+  ) {
+    const event = appendBehaviourEvent({
+      userId: DEMO_USER_ID,
+      workspaceId: habit.id,
+      workspaceType: "habit",
+      todoId: todo?.id,
+      type,
+      metadata: {
+        priority: todo?.priority,
+        heaviness: todo?.heaviness,
+        dueMode: todo?.dueMode,
+        ...metadata,
+      },
+    });
+
+    setBehaviourEvents((currentEvents) => [...currentEvents, event].slice(-500));
+
+    return event;
   }
 
   function loadHabitTodos(currentHabit: Habit) {
@@ -606,6 +678,21 @@ function HabitWorkspacePage() {
   }, [habit.id]);
 
   useEffect(() => {
+    appendBehaviourEvent({
+      userId: DEMO_USER_ID,
+      workspaceId: habit.id,
+      workspaceType: "habit",
+      type: "workspace_opened",
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      setBehaviourEvents(loadBehaviourEvents(DEMO_USER_ID, habit.id));
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [habit.id]);
+
+  useEffect(() => {
     if (
       todos.some(
         (todo) => todo.parentId !== habit.id || todo.parentType !== "habit"
@@ -633,27 +720,23 @@ function HabitWorkspacePage() {
     (todo) => todo.status !== "done" && isTodoBlocked(todo, todos)
   );
   const lateTodos = todos.filter(isTodoLate);
-  const dueSoonTodos = todos.filter(isTodoSoon);
   const nextDueTodo = todos
     .filter((todo) => todo.status !== "done" && todo.dueMode !== "anytime")
     .sort((a, b) => (getDueMinutes(a) ?? 9999) - (getDueMinutes(b) ?? 9999))[0];
 
   const completionPercentage =
     todos.length === 0 ? 0 : Math.round((completedCount / todos.length) * 100);
+  const behaviourSnapshot = useMemo(
+    () => createBehaviourSnapshot({ todos, events: behaviourEvents }),
+    [behaviourEvents, todos]
+  );
+  const taskomonMood = getTaskomonMood(behaviourSnapshot);
+  const taskomonStyle = getTaskomonMoodStyle(taskomonMood);
+  const taskomonMoodImage = TASKOMON_MOOD_IMAGE[taskomonMood];
 
   const taskomonThought = taskomonNotice
     ? taskomonNotice
-    : lateTodos[0]
-    ? `"${lateTodos[0].title}" is past its planned time. Finish it gently or move it to a realistic slot.`
-    : blockedTodos[0]
-    ? `"${blockedTodos[0].title}" is waiting on another bubble. Clear the line before starting it.`
-    : activeTodo
-    ? `You're working on "${activeTodo.title}". Keep it steady.`
-    : dueSoonTodos[0]
-    ? `"${dueSoonTodos[0].title}" is due soon. A small start now will help.`
-    : completedCount === todos.length && todos.length > 0
-    ? "All bubbles are done for now. Nice rhythm."
-    : "Pick a bubble to start. Small actions still count.";
+    : getTaskomonComment(behaviourSnapshot);
 
   const dependencyLines = useMemo(() => {
     return todos.flatMap((todo) => {
@@ -772,6 +855,20 @@ function HabitWorkspacePage() {
   }
 
   function handlePointerUp() {
+    if (dragState) {
+      const movedTodo = todos.find((todo) => todo.id === dragState.todoId);
+      const movedEnough =
+        movedTodo &&
+        (Math.abs(movedTodo.x - dragState.startX) > 2 ||
+          Math.abs(movedTodo.y - dragState.startY) > 2);
+
+      if (movedTodo && movedEnough) {
+        recordBehaviour("todo_moved", movedTodo, {
+          note: "Bubble moved in habit workspace.",
+        });
+      }
+    }
+
     setDragState(null);
     setPanState(null);
   }
@@ -869,6 +966,8 @@ function HabitWorkspacePage() {
       todoId: todo.id,
       offsetX: event.clientX - rect.left - todo.x,
       offsetY: event.clientY - rect.top - todo.y,
+      startX: todo.x,
+      startY: todo.y,
     });
 
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -941,6 +1040,29 @@ function HabitWorkspacePage() {
       })
     );
 
+    if (nextStatus === "in_progress") {
+      recordBehaviour("todo_started", targetTodo, {
+        previousStatus: targetTodo.status,
+        newStatus: nextStatus,
+      });
+    } else if (nextStatus === "done") {
+      recordBehaviour("todo_completed", targetTodo, {
+        previousStatus: targetTodo.status,
+        newStatus: nextStatus,
+        timeSpentSeconds: targetTodo.startedAt
+          ? Math.max(
+              0,
+              Math.round((new Date(now).getTime() - new Date(targetTodo.startedAt).getTime()) / 1000)
+            )
+          : undefined,
+      });
+    } else if (targetTodo.status !== "not_started") {
+      recordBehaviour("todo_reopened", targetTodo, {
+        previousStatus: targetTodo.status,
+        newStatus: nextStatus,
+      });
+    }
+
     if (nextStatus === "done") {
       setLastCompletionTitle(targetTodo.title);
       setTaskomonNotice(`Nice finish on "${targetTodo.title}". That one should feel good.`);
@@ -1012,6 +1134,12 @@ function HabitWorkspacePage() {
     };
 
     setTodos((currentTodos) => [...currentTodos, newTodo]);
+    recordBehaviour("todo_created", newTodo);
+    if (newTodoDependencyId) {
+      recordBehaviour("dependency_added", newTodo, {
+        note: `Depends on ${newTodoDependencyId}.`,
+      });
+    }
     setNewTodoTitle("");
     setSelectedTodoId(newTodo.id);
     setNewTodoDependencyId("");
@@ -1035,6 +1163,9 @@ function HabitWorkspacePage() {
         updatedAt: now,
       }))
     );
+    recordBehaviour("habit_reset", undefined, {
+      note: "Habit bubbles reset for the next check cycle.",
+    });
     setTaskomonNotice("Habit bubbles reset for the next check cycle.");
   }
 
@@ -1049,6 +1180,9 @@ function HabitWorkspacePage() {
         updatedAt: now,
       }))
     );
+    recordBehaviour("habit_completed", undefined, {
+      note: "Habit marked complete from the top bar.",
+    });
 
     if (habit.mode === "one_time") {
       const nextHabits = habitList.map((habitItem) =>
@@ -1775,22 +1909,28 @@ function HabitWorkspacePage() {
             )}
 
             <div className="pointer-events-none absolute bottom-6 right-6 z-30 flex max-w-[430px] items-end gap-3">
-              <div className="relative rounded-3xl border border-orange-300/25 bg-gradient-to-br from-[#3b180f]/95 via-[#28130e]/95 to-[#1b100d]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.38)] backdrop-blur">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
+              <div
+                className={`relative rounded-3xl border p-4 shadow-[0_18px_60px_rgba(0,0,0,0.38)] backdrop-blur ${taskomonStyle.panel}`}
+              >
+                <p
+                  className={`text-[10px] font-black uppercase tracking-[0.2em] ${taskomonStyle.label}`}
+                >
                   Taskomon
                 </p>
                 <p className="mt-1 text-sm font-bold leading-relaxed text-orange-50">
                   {taskomonThought}
                 </p>
 
-                <div className="absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t border-orange-300/25 bg-[#22110d]" />
+                <div
+                  className={`absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t ${taskomonStyle.pointer}`}
+                />
               </div>
 
               <div className="h-28 w-28 shrink-0 overflow-hidden rounded-full border border-orange-300/30 bg-orange-500/10 shadow-[0_0_35px_rgba(249,115,22,0.22)]">
                 <img
-                  src={taskomonImage}
-                  alt="Taskomon"
-                  className="h-full w-full object-cover"
+                  src={taskomonMoodImage}
+                  alt={`Taskomon ${taskomonMood}`}
+                  className="h-full w-full object-contain p-1"
                 />
               </div>
             </div>

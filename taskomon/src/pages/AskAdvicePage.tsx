@@ -3,8 +3,12 @@ import type { FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import lookupAdviceImage from "../assets/taskomon/Taskomon-LookupAdvice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
+import { DEMO_USER_ID } from "../data/demoData";
+import { appendBehaviourEvent } from "../services/behaviourService";
 
 type AdviceTarget = "workflow" | "habit";
+
+const ADVICE_TARGETS = ["habit", "workflow"] as const;
 
 const EXAMPLE_PROMPTS = [
   "How to gain weight safely",
@@ -26,6 +30,13 @@ function AskAdvicePage() {
     setIsThinking(true);
     sessionStorage.setItem("taskomon:advice-query", trimmedQuery);
     sessionStorage.setItem("taskomon:advice-target", targetType);
+    appendBehaviourEvent({
+      userId: DEMO_USER_ID,
+      type: "advice_requested",
+      metadata: {
+        note: `${targetType}: ${trimmedQuery}`,
+      },
+    });
 
     window.setTimeout(() => {
       navigate("/advice/suggest", {
@@ -109,12 +120,12 @@ function AskAdvicePage() {
                     Question
                   </p>
                   <h2 className="mt-0.5 text-base font-black text-white">
-                    What do you want to build?
+                    What do you want to do?
                   </h2>
                 </div>
 
                 <div className="flex rounded-xl border border-orange-300/20 bg-[#0d0908] p-1">
-                  {(["habit", "workflow"] as AdviceTarget[]).map((type) => (
+                  {ADVICE_TARGETS.map((type) => (
                     <button
                       key={type}
                       type="button"

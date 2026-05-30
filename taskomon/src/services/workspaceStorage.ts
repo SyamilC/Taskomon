@@ -1,5 +1,5 @@
 import { demoHabits, demoWorkflows } from "../data/demoData";
-import type { Habit, Todo, Workflow } from "../types";
+import type { Habit, PomodoroPhase, Todo, Workflow } from "../types";
 import { loadFromStorage, removeFromStorage, saveToStorage } from "./storageServices";
 
 export const HABITS_STORAGE_KEY = "taskomon:habits";
@@ -10,7 +10,12 @@ export const WORKFLOW_STORAGE_PREFIX = "taskomon:workflow";
 export type WorkflowRuntimeSummary = Pick<
   Workflow,
   "status" | "focusMinutes" | "restMinutes" | "updatedAt"
->;
+> & {
+  timerPhase?: PomodoroPhase;
+  timerSeconds?: number;
+  timerRunning?: boolean;
+  timerUpdatedAt?: string;
+};
 
 export function getHabitTodoStorageKey(habitId: string) {
   return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
@@ -35,6 +40,9 @@ export function getDefaultWorkflowRuntime(
     status: workflow.status,
     focusMinutes: workflow.focusMinutes,
     restMinutes: workflow.restMinutes,
+    timerPhase: "focus",
+    timerSeconds: workflow.focusMinutes * 60,
+    timerRunning: false,
     updatedAt: workflow.updatedAt,
   };
 }

@@ -2,10 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import adviceImage from "../assets/taskomon/Taskomon-Advice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
+import { DEMO_USER_ID } from "../data/demoData";
 import { generateAdviceTodos } from "../services/adviceService";
+import { appendBehaviourEvent } from "../services/behaviourService";
 import type { AdviceResponse, SuggestedTodo } from "../types";
 
 type AdviceTarget = "workflow" | "habit";
+
+function getRouteState(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return value as {
+    query?: string;
+    targetType?: AdviceTarget;
+  };
+}
 
 const PRIORITY_STYLE: Record<
   SuggestedTodo["priority"],
@@ -81,17 +94,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function getRouteState(value: unknown) {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-
-  return value as {
-    query?: string;
-    targetType?: AdviceTarget;
-  };
-}
-
 function getAdviceBubbleDimensions(todo: SuggestedTodo) {
   const titleBoost = Math.max(0, todo.title.trim().length - 14) * 5.5;
 
@@ -111,7 +113,13 @@ function getAdviceBubbleDimensions(todo: SuggestedTodo) {
   };
 }
 
-function AdviceBubble({ todo, index }: { todo: SuggestedTodo; index: number }) {
+function AdviceBubble({
+  todo,
+  index,
+}: {
+  todo: SuggestedTodo;
+  index: number;
+}) {
   const priorityStyle = PRIORITY_STYLE[todo.priority];
   const heavinessStyle = HEAVINESS_STYLE[todo.heaviness];
   const dimensions = getAdviceBubbleDimensions(todo);
@@ -223,11 +231,22 @@ function SuggestAdvicePage() {
   }, [advice, targetType]);
 
   const primaryAction =
-    targetType === "habit" ? "Make Habit Shell" : "Make Workflow Shell";
+    targetType === "habit" ? "Make Workspace" : "Make Workspace";
   const actionHint =
     targetType === "habit"
-      ? "Ready to shape these into a habit shell."
-      : "Ready to shape these into a workflow shell.";
+      ? "Ready to shape these into a habit."
+      : "Ready to shape these into a workflow.";
+
+  function handleUseSuggestion() {
+    appendBehaviourEvent({
+      userId: DEMO_USER_ID,
+      type: "suggestion_added",
+      metadata: {
+        note: `${targetType}: ${query} (${suggestedTodos.length} suggested bubbles)`,
+      },
+    });
+    setShellMessage(`${primaryAction} selected.`);
+  }
 
   return (
     <main className="h-screen overflow-hidden bg-[#100c0b] text-neutral-100 antialiased">
@@ -337,9 +356,7 @@ function SuggestAdvicePage() {
                     Back
                   </Link>
                   <button
-                    onClick={() =>
-                      setShellMessage(`${primaryAction} selected.`)
-                    }
+                    onClick={handleUseSuggestion}
                     className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black uppercase text-white transition hover:brightness-110"
                   >
                     {primaryAction}

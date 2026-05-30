@@ -1,15 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import taskomonFrontFaceImage from "../assets/taskomon/Taskomon-FrontFace.png";
+import taskomonHappyImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
+import taskomonThinkingImage from "../assets/taskomon/Taskomon-Icon-Thinking.png";
+import taskomonTiredImage from "../assets/taskomon/Taskomon-Icon-Tired.png";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoTodos } from "../data/demoData";
+import { DEMO_USER_ID, demoTodos } from "../data/demoData";
+import {
+  appendBehaviourEvent,
+  loadBehaviourEvents,
+} from "../services/behaviourService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
-import { getStoredWorkflows } from "../services/workspaceStorage";
+import {
+  createBehaviourSnapshot,
+  getTaskomonComment,
+  getTaskomonMood,
+  getTaskomonMoodStyle,
+} from "../services/taskomonEngine";
+import {
+  getDefaultWorkflowRuntime,
+  getStoredWorkflows,
+  getWorkflowRuntimeStorageKey,
+  getWorkflowTodoStorageKey,
+} from "../services/workspaceStorage";
+import type { WorkflowRuntimeSummary } from "../services/workspaceStorage";
 import type {
+  BehaviourEventType,
   Heaviness,
   PomodoroPhase,
   PomodoroTimerState,
   Priority,
+  TaskomonMood,
   Todo,
   TodoStatus,
   Workflow,
@@ -20,6 +42,8 @@ type DragState = {
   todoId: string;
   offsetX: number;
   offsetY: number;
+  startX: number;
+  startY: number;
 };
 
 type PanState = {
@@ -42,18 +66,19 @@ type EditorDragState = {
   startTop: number;
 };
 
-type WorkflowRuntime = {
-  status: Workflow["status"];
-  focusMinutes: number;
-  restMinutes: number;
-  updatedAt: string;
-};
-
 const BASE_BUBBLE_HEIGHT = 128;
 const WORLD_WIDTH = 2800;
 const WORLD_HEIGHT = 1800;
-const WORKFLOW_STORAGE_PREFIX = "taskomon:workflow";
-const LAST_OPENED_WORKFLOW_KEY = "taskomon:lastOpenedWorkflowId";
+
+const TASKOMON_MOOD_IMAGE: Record<TaskomonMood, string> = {
+  neutral: taskomonFrontFaceImage,
+  happy: taskomonHappyImage,
+  focused: taskomonThinkingImage,
+  worried: taskomonThinkingImage,
+  tired: taskomonTiredImage,
+  proud: taskomonHappyImage,
+};
+
 const PRIORITY_STYLE: Record<
   Priority,
   {
@@ -90,6 +115,7 @@ const PRIORITY_STYLE: Record<
     heightBoost: 18,
   },
 };
+
 const HEAVINESS_STYLE: Record<
   Heaviness,
   {
@@ -127,38 +153,9 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function getWorkflowTodoStorageKey(workflowId: string) {
-  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:todos`;
-}
-
-function getWorkflowRuntimeStorageKey(workflowId: string) {
-  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:runtime`;
-}
-
-function getDefaultRuntime(workflow: Workflow): WorkflowRuntime {
-  return {
-    status: workflow.status,
-    focusMinutes: workflow.focusMinutes,
-    restMinutes: workflow.restMinutes,
-    updatedAt: workflow.updatedAt,
-  };
-}
-
-function getInitialWorkflowTodos(workflowId: string) {
-  return demoTodos
-    .filter((todo) => todo.parentType === "workflow" && todo.parentId === workflowId)
-    .map((todo, index) => ({
-      ...todo,
-      x: todo.x + (index === 0 ? 380 : 460),
-      y: todo.y + 260,
-      priority: todo.priority ?? "medium",
-      heaviness: todo.heaviness ?? "medium",
-      dueMode: undefined,
-      dueTime: undefined,
-    }));
-}
-
-function getBubbleDimensions(todo: Pick<Todo, "title" | "priority" | "heaviness">) {
+function getBubbleDimensions(
+  todo: Pick<Todo, "title" | "priority" | "heaviness">
+) {
   const priority = todo.priority ?? "medium";
   const heaviness = todo.heaviness ?? "medium";
   const titleBoost = Math.max(0, todo.title.trim().length - 14) * 5.5;
@@ -215,7 +212,7 @@ function getNextStatus(status: TodoStatus): TodoStatus {
   return "not_started";
 }
 
-function getStatusLabel(status: TodoStatus) {
+function getCompactStatusLabel(status: TodoStatus) {
   if (status === "in_progress") return "Doing";
   if (status === "done") return "Done";
   return "Idle";
@@ -224,20 +221,25 @@ function getStatusLabel(status: TodoStatus) {
 function getBubbleTheme(status: TodoStatus) {
   if (status === "done") {
     return {
-      shell: "border-emerald-300/75 bg-emerald-500/22 shadow-[0_0_34px_rgba(16,185,129,0.22)]",
+      shell:
+        "border-emerald-300/75 bg-emerald-500/22 shadow-[0_0_34px_rgba(16,185,129,0.22)]",
       glow: "bg-emerald-300/28",
       label: "text-emerald-50 border-emerald-200/45 bg-emerald-400/18",
     };
   }
+
   if (status === "in_progress") {
     return {
-      shell: "border-orange-300/80 bg-orange-500/22 shadow-[0_0_38px_rgba(249,115,22,0.26)]",
+      shell:
+        "border-orange-300/80 bg-orange-500/22 shadow-[0_0_38px_rgba(249,115,22,0.26)]",
       glow: "bg-orange-300/30",
       label: "text-orange-50 border-orange-200/50 bg-orange-400/18",
     };
   }
+
   return {
-    shell: "border-rose-300/45 bg-rose-500/14 shadow-[0_0_28px_rgba(244,63,94,0.12)]",
+    shell:
+      "border-rose-300/45 bg-rose-500/14 shadow-[0_0_28px_rgba(244,63,94,0.12)]",
     glow: "bg-rose-300/16",
     label: "text-rose-50/80 border-rose-200/30 bg-rose-400/12",
   };
@@ -271,12 +273,71 @@ function wouldCreateDependencyCycle(
   return dependencyChainContains(dependencyId);
 }
 
+type WorkflowRuntime = WorkflowRuntimeSummary;
+
+const LAST_OPENED_WORKFLOW_KEY = "taskomon:lastOpenedWorkflowId";
+
+function getInitialWorkflowTodos(workflowId: string) {
+  return demoTodos
+    .filter((todo) => todo.parentType === "workflow" && todo.parentId === workflowId)
+    .map((todo, index) => ({
+      ...todo,
+      x: todo.x + (index === 0 ? 380 : 460),
+      y: todo.y + 260,
+      priority: todo.priority ?? "medium",
+      heaviness: todo.heaviness ?? "medium",
+      dueMode: undefined,
+      dueTime: undefined,
+    }));
+}
+
+function getDefaultRuntime(workflow: Workflow): WorkflowRuntime {
+  return getDefaultWorkflowRuntime(workflow);
+}
+
 function formatClock(totalSeconds: number) {
   const safeSeconds = Math.max(0, totalSeconds);
   const minutes = Math.floor(safeSeconds / 60);
   const seconds = safeSeconds % 60;
 
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getTimerDurationSeconds(
+  phase: PomodoroPhase,
+  runtime: Pick<WorkflowRuntime, "focusMinutes" | "restMinutes">
+) {
+  return (phase === "focus" ? runtime.focusMinutes : runtime.restMinutes) * 60;
+}
+
+function getResolvedStoredTimer(runtime: WorkflowRuntime): PomodoroTimerState {
+  let phase = runtime.timerPhase ?? "focus";
+  let remainingSeconds =
+    runtime.timerSeconds ?? getTimerDurationSeconds(phase, runtime);
+  const running = runtime.status === "active" && runtime.timerRunning === true;
+  const savedAt = runtime.timerUpdatedAt
+    ? new Date(runtime.timerUpdatedAt).getTime()
+    : Number.NaN;
+
+  if (running && Number.isFinite(savedAt)) {
+    let elapsedSeconds = Math.max(0, Math.floor((Date.now() - savedAt) / 1000));
+
+    while (elapsedSeconds >= remainingSeconds && remainingSeconds > 0) {
+      elapsedSeconds -= remainingSeconds;
+      phase = phase === "focus" ? "rest" : "focus";
+      remainingSeconds = getTimerDurationSeconds(phase, runtime);
+    }
+
+    remainingSeconds = Math.max(1, remainingSeconds - elapsedSeconds);
+  }
+
+  return {
+    phase,
+    remainingSeconds: Math.max(1, Math.round(remainingSeconds)),
+    running,
+    focusMinutes: runtime.focusMinutes,
+    restMinutes: runtime.restMinutes,
+  };
 }
 
 function getWorkflowAttentionScore(workflow: Workflow) {
@@ -306,7 +367,10 @@ function getWorkflowAttentionScore(workflow: Workflow) {
   );
 }
 
-function getWorkflowRouteTarget(workflows: Workflow[], routeWorkflowId?: string) {
+function getWorkflowRouteTarget(
+  workflows: Workflow[],
+  routeWorkflowId?: string
+) {
   if (
     routeWorkflowId &&
     workflows.some((workflow) => workflow.id === routeWorkflowId)
@@ -438,7 +502,7 @@ function WorkflowBubble({
             >
               {isBlocked && todo.status === "not_started"
                 ? "Blocked"
-                : getStatusLabel(todo.status)}
+                : getCompactStatusLabel(todo.status)}
             </button>
             <button
               onPointerDown={(event) => event.stopPropagation()}
@@ -469,6 +533,11 @@ function WorkflowWorkspacePage() {
     workflowList[0];
   const workflowStorageKey = getWorkflowTodoStorageKey(workflow.id);
   const workflowRuntimeStorageKey = getWorkflowRuntimeStorageKey(workflow.id);
+  const storedRuntime = loadFromStorage<WorkflowRuntime>(
+    workflowRuntimeStorageKey,
+    getDefaultRuntime(workflow)
+  );
+  const storedTimer = getResolvedStoredTimer(storedRuntime);
 
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [panState, setPanState] = useState<PanState | null>(null);
@@ -493,19 +562,21 @@ function WorkflowWorkspacePage() {
     message: "",
   });
   const [lastCompletionTitle, setLastCompletionTitle] = useState("");
-  const [timerPhase, setTimerPhase] = useState<PomodoroPhase>("focus");
-  const [timerSeconds, setTimerSeconds] = useState(workflow.focusMinutes * 60);
-  const [timerRunning, setTimerRunning] = useState(false);
+  const [behaviourEvents, setBehaviourEvents] = useState(() =>
+    loadBehaviourEvents(DEMO_USER_ID, workflow.id)
+  );
+  const [timerPhase, setTimerPhase] = useState<PomodoroPhase>(storedTimer.phase);
+  const [timerSeconds, setTimerSeconds] = useState(
+    storedTimer.remainingSeconds
+  );
+  const [timerRunning, setTimerRunning] = useState(storedTimer.running);
 
   const [workflowRuntimeState, setWorkflowRuntimeState] = useState<{
     workflowId: string;
     runtime: WorkflowRuntime;
   }>(() => ({
     workflowId: workflow.id,
-    runtime: loadFromStorage(
-      workflowRuntimeStorageKey,
-      getDefaultRuntime(workflow)
-    ),
+    runtime: storedRuntime,
   }));
   const [todoState, setTodoState] = useState<{
     workflowId: string;
@@ -541,6 +612,45 @@ function WorkflowWorkspacePage() {
 
   function setTaskomonNotice(message: string) {
     setTaskomonNoticeState({ workflowId: workflow.id, message });
+  }
+
+  function recordBehaviour(
+    type: BehaviourEventType,
+    todo?: Todo,
+    metadata: {
+      timeSpentSeconds?: number;
+      previousStatus?: TodoStatus;
+      newStatus?: TodoStatus;
+      priority?: Priority;
+      heaviness?: Heaviness;
+      note?: string;
+    } = {}
+  ) {
+    if (
+      runtime.status === "held" &&
+      type !== "workflow_held" &&
+      type !== "workflow_resumed" &&
+      type !== "workspace_opened"
+    ) {
+      return undefined;
+    }
+
+    const event = appendBehaviourEvent({
+      userId: DEMO_USER_ID,
+      workspaceId: workflow.id,
+      workspaceType: "workflow",
+      todoId: todo?.id,
+      type,
+      metadata: {
+        priority: todo?.priority,
+        heaviness: todo?.heaviness,
+        ...metadata,
+      },
+    });
+
+    setBehaviourEvents((currentEvents) => [...currentEvents, event].slice(-500));
+
+    return event;
   }
 
   function setTodos(updater: Todo[] | ((currentTodos: Todo[]) => Todo[])) {
@@ -595,13 +705,31 @@ function WorkflowWorkspacePage() {
   }, [workflow.id]);
 
   useEffect(() => {
+    appendBehaviourEvent({
+      userId: DEMO_USER_ID,
+      workspaceId: workflow.id,
+      workspaceType: "workflow",
+      type: "workspace_opened",
+    });
+
     const timeoutId = window.setTimeout(() => {
+      setBehaviourEvents(loadBehaviourEvents(DEMO_USER_ID, workflow.id));
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [workflow.id]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      const nextRuntime = loadFromStorage<WorkflowRuntime>(
+        workflowRuntimeStorageKey,
+        getDefaultRuntime(workflow)
+      );
+      const nextTimer = getResolvedStoredTimer(nextRuntime);
+
       setWorkflowRuntimeState({
         workflowId: workflow.id,
-        runtime: loadFromStorage(
-          workflowRuntimeStorageKey,
-          getDefaultRuntime(workflow)
-        ),
+        runtime: nextRuntime,
       });
       setTodoState({
         workflowId: workflow.id,
@@ -613,9 +741,9 @@ function WorkflowWorkspacePage() {
       setEditingTodoId("");
       setSelectedTodoId("");
       setEditorPosition(null);
-      setTimerPhase("focus");
-      setTimerSeconds(workflow.focusMinutes * 60);
-      setTimerRunning(false);
+      setTimerPhase(nextTimer.phase);
+      setTimerSeconds(nextTimer.remainingSeconds);
+      setTimerRunning(nextTimer.running);
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
@@ -634,8 +762,20 @@ function WorkflowWorkspacePage() {
   }, [todos, workflow.id, workflowStorageKey]);
 
   useEffect(() => {
-    saveToStorage(workflowRuntimeStorageKey, runtime);
-  }, [runtime, workflowRuntimeStorageKey]);
+    saveToStorage(workflowRuntimeStorageKey, {
+      ...runtime,
+      timerPhase,
+      timerSeconds,
+      timerRunning: runtime.status === "active" && timerRunning,
+      timerUpdatedAt: new Date().toISOString(),
+    });
+  }, [
+    runtime,
+    timerPhase,
+    timerRunning,
+    timerSeconds,
+    workflowRuntimeStorageKey,
+  ]);
 
   useEffect(() => {
     if (!lastCompletionTitle) return;
@@ -648,7 +788,7 @@ function WorkflowWorkspacePage() {
   }, [lastCompletionTitle]);
 
   useEffect(() => {
-    if (!timerRunning) return;
+    if (!timerRunning || runtime.status !== "active") return;
 
     const intervalId = window.setInterval(() => {
       setTimerSeconds((currentSeconds) => {
@@ -657,6 +797,20 @@ function WorkflowWorkspacePage() {
         }
 
         if (timerPhase === "focus") {
+          const timerEvent = appendBehaviourEvent({
+            userId: DEMO_USER_ID,
+            workspaceId: workflow.id,
+            workspaceType: "workflow",
+            type: "timer_completed",
+            metadata: {
+              timeSpentSeconds: runtime.focusMinutes * 60,
+              note: "Focus interval completed.",
+            },
+          });
+
+          setBehaviourEvents((currentEvents) =>
+            [...currentEvents, timerEvent].slice(-500)
+          );
           setTimerPhase("rest");
           setTaskomonNoticeState({
             workflowId: workflow.id,
@@ -665,6 +819,20 @@ function WorkflowWorkspacePage() {
           return runtime.restMinutes * 60;
         }
 
+        const restEvent = appendBehaviourEvent({
+          userId: DEMO_USER_ID,
+          workspaceId: workflow.id,
+          workspaceType: "workflow",
+          type: "rest_taken",
+          metadata: {
+            timeSpentSeconds: runtime.restMinutes * 60,
+            note: "Rest interval completed.",
+          },
+        });
+
+        setBehaviourEvents((currentEvents) =>
+          [...currentEvents, restEvent].slice(-500)
+        );
         setTimerPhase("focus");
         setTaskomonNoticeState({
           workflowId: workflow.id,
@@ -678,6 +846,7 @@ function WorkflowWorkspacePage() {
   }, [
     runtime.focusMinutes,
     runtime.restMinutes,
+    runtime.status,
     timerPhase,
     timerRunning,
     workflow.id,
@@ -696,8 +865,6 @@ function WorkflowWorkspacePage() {
   const focusTotalSeconds = runtime.focusMinutes * 60;
   const focusElapsedSeconds =
     timerPhase === "focus" ? focusTotalSeconds - timerSeconds : 0;
-  const focusElapsedRatio =
-    focusTotalSeconds === 0 ? 0 : focusElapsedSeconds / focusTotalSeconds;
   const timerProgress =
     timerState.phase === "focus"
       ? clamp((focusElapsedSeconds / focusTotalSeconds) * 100, 0, 100)
@@ -708,23 +875,24 @@ function WorkflowWorkspacePage() {
           0,
           100
         );
-  const taskomonThought = taskomonNotice
+  const behaviourSnapshot = useMemo(
+    () => createBehaviourSnapshot({ todos, events: behaviourEvents }),
+    [behaviourEvents, todos]
+  );
+  const workflowIsHeld = runtime.status === "held";
+  const workflowIsCompleted = runtime.status === "completed";
+  const taskomonMood = workflowIsHeld
+    ? "neutral"
+    : getTaskomonMood(behaviourSnapshot);
+  const taskomonStyle = getTaskomonMoodStyle(taskomonMood);
+  const taskomonMoodImage = TASKOMON_MOOD_IMAGE[taskomonMood];
+  const taskomonThought = workflowIsHeld
+    ? "Workflow is held. I won't monitor or analyse these bubbles until you resume."
+    : workflowIsCompleted
+    ? "Workflow complete. Monitoring is quiet for this session."
+    : taskomonNotice
     ? taskomonNotice
-    : runtime.status === "held"
-    ? "Workflow is held. I will keep the bubbles as they are until you resume."
-    : runtime.status === "completed"
-    ? "Workflow complete. That session can be archived or used as a reference."
-    : timerPhase === "rest"
-    ? "Rest interval is running. Let the brain cool down before the next bubble."
-    : activeTodo && activeTodo.heaviness === "heavy" && focusElapsedRatio > 0.35
-    ? `Your work on "${activeTodo.title}" is getting slower. Is the task getting difficult? You should take a rest or split it.`
-    : activeTodo && activeTodo.priority === "high"
-    ? `"${activeTodo.title}" is the current high-priority bubble. Stay with one clean action.`
-    : blockedTodos[0]
-    ? `"${blockedTodos[0].title}" is blocked by a dependency. Clear the connected bubble first.`
-    : activeTodo
-    ? `You are working on "${activeTodo.title}". Keep the check-ins steady.`
-    : "Start one workflow bubble and I will watch the rhythm from here.";
+    : getTaskomonComment(behaviourSnapshot);
   const dependencyLines = useMemo(() => {
     return todos.flatMap((todo) => {
       return todo.dependencyIds
@@ -838,6 +1006,20 @@ function WorkflowWorkspacePage() {
   }
 
   function handlePointerUp() {
+    if (dragState) {
+      const movedTodo = todos.find((todo) => todo.id === dragState.todoId);
+      const movedEnough =
+        movedTodo &&
+        (Math.abs(movedTodo.x - dragState.startX) > 2 ||
+          Math.abs(movedTodo.y - dragState.startY) > 2);
+
+      if (movedTodo && movedEnough) {
+        recordBehaviour("todo_moved", movedTodo, {
+          note: "Bubble moved in workflow workspace.",
+        });
+      }
+    }
+
     setDragState(null);
     setPanState(null);
   }
@@ -935,6 +1117,8 @@ function WorkflowWorkspacePage() {
       todoId: todo.id,
       offsetX: event.clientX - rect.left - todo.x,
       offsetY: event.clientY - rect.top - todo.y,
+      startX: todo.x,
+      startY: todo.y,
     });
 
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -990,6 +1174,12 @@ function WorkflowWorkspacePage() {
     };
 
     setTodos((currentTodos) => [...currentTodos, newTodo]);
+    recordBehaviour("todo_created", newTodo);
+    if (newTodoDependencyId) {
+      recordBehaviour("dependency_added", newTodo, {
+        note: `Depends on ${newTodoDependencyId}.`,
+      });
+    }
     setNewTodoTitle("");
     setNewTodoDependencyId("");
     setSelectedTodoId(newTodo.id);
@@ -998,6 +1188,11 @@ function WorkflowWorkspacePage() {
   }
 
   function handleCycleStatus(todoId: string) {
+    if (runtime.status === "held") {
+      setTaskomonNotice("Resume this workflow before tracking bubble status.");
+      return;
+    }
+
     const targetTodo = todos.find((todo) => todo.id === todoId);
     if (!targetTodo) return;
 
@@ -1049,6 +1244,29 @@ function WorkflowWorkspacePage() {
     });
 
     setSelectedTodoId(todoId);
+
+    if (nextStatus === "in_progress") {
+      recordBehaviour("todo_started", targetTodo, {
+        previousStatus: targetTodo.status,
+        newStatus: nextStatus,
+      });
+    } else if (nextStatus === "done") {
+      recordBehaviour("todo_completed", targetTodo, {
+        previousStatus: targetTodo.status,
+        newStatus: nextStatus,
+        timeSpentSeconds: targetTodo.startedAt
+          ? Math.max(
+              0,
+              Math.round((new Date(now).getTime() - new Date(targetTodo.startedAt).getTime()) / 1000)
+            )
+          : undefined,
+      });
+    } else if (targetTodo.status !== "not_started") {
+      recordBehaviour("todo_reopened", targetTodo, {
+        previousStatus: targetTodo.status,
+        newStatus: nextStatus,
+      });
+    }
 
     if (nextStatus === "done") {
       setLastCompletionTitle(targetTodo.title);
@@ -1176,6 +1394,15 @@ function WorkflowWorkspacePage() {
     setTimerRunning(false);
   }
 
+  function handleToggleTimer() {
+    const nextRunning = !timerRunning;
+
+    setTimerRunning(nextRunning);
+    recordBehaviour(nextRunning ? "timer_started" : "timer_paused", undefined, {
+      note: `${timerPhase} timer ${nextRunning ? "started" : "paused"}.`,
+    });
+  }
+
   function handleResetTimer() {
     setTimerSeconds(
       timerPhase === "focus" ? runtime.focusMinutes * 60 : runtime.restMinutes * 60
@@ -1189,6 +1416,9 @@ function WorkflowWorkspacePage() {
       ...currentRuntime,
       status: "held",
     }));
+    recordBehaviour("workflow_held", undefined, {
+      note: "Workflow held from the timer controls.",
+    });
     setTaskomonNotice("Workflow held. Your bubbles are stored for later.");
   }
 
@@ -1197,6 +1427,9 @@ function WorkflowWorkspacePage() {
       ...currentRuntime,
       status: "active",
     }));
+    recordBehaviour("workflow_resumed", undefined, {
+      note: "Workflow resumed from held state.",
+    });
     setTaskomonNotice("Workflow resumed. Start a bubble and I will watch the rhythm.");
   }
 
@@ -1206,6 +1439,9 @@ function WorkflowWorkspacePage() {
       ...currentRuntime,
       status: "completed",
     }));
+    recordBehaviour("workflow_completed", undefined, {
+      note: "Workflow marked complete from the timer controls.",
+    });
     setTaskomonNotice("Workflow marked complete for this session.");
   }
 
@@ -1324,6 +1560,29 @@ function WorkflowWorkspacePage() {
                     {runtime.status}
                   </p>
                 </div>
+                {runtime.status === "held" ? (
+                  <button
+                    onClick={handleResumeWorkflow}
+                    className="rounded-xl border border-emerald-300/30 bg-emerald-500/10 px-4 py-2 text-xs font-black uppercase text-emerald-100 transition hover:bg-emerald-500/20"
+                  >
+                    Resume
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleHoldWorkflow}
+                    disabled={runtime.status === "completed"}
+                    className="rounded-xl border border-amber-300/30 bg-amber-500/10 px-4 py-2 text-xs font-black uppercase text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Hold
+                  </button>
+                )}
+                <button
+                  onClick={handleCompleteWorkflow}
+                  disabled={runtime.status === "completed"}
+                  className="rounded-xl border border-emerald-300/30 bg-emerald-500/10 px-4 py-2 text-xs font-black uppercase text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Complete
+                </button>
               </div>
             </div>
           </header>
@@ -1523,7 +1782,7 @@ function WorkflowWorkspacePage() {
 
               <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-2">
                 <button
-                  onClick={() => setTimerRunning((running) => !running)}
+                  onClick={handleToggleTimer}
                   disabled={runtime.status === "held" || runtime.status === "completed"}
                   className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-2 text-xs font-black uppercase text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -1547,29 +1806,6 @@ function WorkflowWorkspacePage() {
                 </button>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {runtime.status === "held" ? (
-                  <button
-                    onClick={handleResumeWorkflow}
-                    className="rounded-xl border border-emerald-300/25 bg-emerald-500/10 px-3 py-2 text-xs font-black uppercase text-emerald-100 transition hover:bg-emerald-500/20"
-                  >
-                    Resume
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleHoldWorkflow}
-                    className="rounded-xl border border-amber-300/25 bg-amber-500/10 px-3 py-2 text-xs font-black uppercase text-amber-100 transition hover:bg-amber-500/20"
-                  >
-                    Hold
-                  </button>
-                )}
-                <button
-                  onClick={handleCompleteWorkflow}
-                  className="rounded-xl border border-emerald-300/25 bg-emerald-500/10 px-3 py-2 text-xs font-black uppercase text-emerald-100 transition hover:bg-emerald-500/20"
-                >
-                  Complete
-                </button>
-              </div>
             </div>
 
             {editingTodo && (
@@ -1833,19 +2069,26 @@ function WorkflowWorkspacePage() {
             )}
 
             <div className="pointer-events-none absolute bottom-6 right-6 z-30 flex max-w-[430px] items-end gap-3">
-              <div className="relative rounded-3xl border border-orange-300/25 bg-gradient-to-br from-[#3b180f]/95 via-[#28130e]/95 to-[#1b100d]/95 p-4 shadow-[0_18px_60px_rgba(0,0,0,0.38)] backdrop-blur">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-300">
+              <div
+                className={`relative rounded-3xl border p-4 shadow-[0_18px_60px_rgba(0,0,0,0.38)] backdrop-blur ${taskomonStyle.panel}`}
+              >
+                <p
+                  className={`text-[10px] font-black uppercase tracking-[0.2em] ${taskomonStyle.label}`}
+                >
                   Taskomon
                 </p>
                 <p className="mt-1 max-w-xs text-sm font-bold leading-snug text-orange-50">
                   {taskomonThought}
                 </p>
+                <div
+                  className={`absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t ${taskomonStyle.pointer}`}
+                />
               </div>
               <div className="grid h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-3xl border border-orange-300/30 bg-orange-500/10 shadow-[0_0_40px_rgba(249,115,22,0.24)]">
                 <img
-                  src={taskomonImage}
-                  alt="Taskomon"
-                  className="h-full w-full object-cover"
+                  src={taskomonMoodImage}
+                  alt={`Taskomon ${taskomonMood}`}
+                  className="h-full w-full object-contain p-1"
                 />
               </div>
             </div>
