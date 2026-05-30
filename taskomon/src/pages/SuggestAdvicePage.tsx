@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import adviceImage from "../assets/taskomon/Taskomon-Advice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
 import { DEMO_USER_ID } from "../data/demoData";
 import { generateAdviceTodos } from "../services/adviceService";
 import { appendBehaviourEvent } from "../services/behaviourService";
-import type { AdviceResponse, SuggestedTodo } from "../types";
+import { saveToStorage } from "../services/storageServices";
+import {
+  getStoredHabits,
+  getStoredWorkflows,
+  getHabitTodoStorageKey,
+  getWorkflowRuntimeStorageKey,
+  getWorkflowTodoStorageKey,
+  saveStoredHabits,
+  saveStoredWorkflows,
+} from "../services/workspaceStorage";
+import type { AdvicePlan, Habit, SuggestedTodo, Todo, Workflow } from "../types";
 
 type AdviceTarget = "workflow" | "habit";
 
@@ -116,19 +126,28 @@ function getAdviceBubbleDimensions(todo: SuggestedTodo) {
 function AdviceBubble({
   todo,
   index,
+  selected,
+  onToggle,
 }: {
   todo: SuggestedTodo;
   index: number;
+  selected: boolean;
+  onToggle: () => void;
 }) {
   const priorityStyle = PRIORITY_STYLE[todo.priority];
   const heavinessStyle = HEAVINESS_STYLE[todo.heaviness];
   const dimensions = getAdviceBubbleDimensions(todo);
 
   return (
-    <article
+    <button
+      type="button"
+      onClick={onToggle}
       data-testid="advice-bubble"
       className={[
-        "advice-float relative mx-auto select-none overflow-hidden rounded-full border border-emerald-200/30 bg-[#0f3a2b]/90 p-4 text-center",
+        "advice-float relative mx-auto select-none overflow-hidden rounded-full border bg-[#0f3a2b]/90 p-4 text-center transition",
+        selected
+          ? "border-amber-200/70 brightness-110"
+          : "border-emerald-200/30 hover:border-amber-200/40",
         priorityStyle.halo,
         heavinessStyle.ring,
       ].join(" ")}
@@ -150,6 +169,16 @@ function AdviceBubble({
           priorityStyle.tone,
         ].join(" ")}
       />
+      <div
+        className={[
+          "absolute left-4 top-3 rounded-full border px-2 py-0.5 text-[8px] font-black uppercase",
+          selected
+            ? "border-amber-200/60 bg-amber-300/20 text-amber-100"
+            : "border-emerald-200/20 bg-black/20 text-emerald-100/45",
+        ].join(" ")}
+      >
+        {selected ? "Selected" : "Pick"}
+      </div>
       <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full bg-emerald-300/18 blur-2xl" />
 
       <div className="relative z-10 flex h-full flex-col items-center justify-center">
@@ -178,11 +207,12 @@ function AdviceBubble({
           </span>
         </div>
       </div>
-    </article>
+    </button>
   );
 }
 
 function SuggestAdvicePage() {
+  const navigate = useNavigate();
   const location = useLocation();
   const routeState = getRouteState(location.state);
   const query =
@@ -193,7 +223,10 @@ function SuggestAdvicePage() {
     routeState.targetType ??
     (sessionStorage.getItem("taskomon:advice-target") as AdviceTarget | null) ??
     "habit";
-  const [advice, setAdvice] = useState<AdviceResponse | null>(null);
+  const [advice, setAdvice] = useState<AdvicePlan | null>(null);
+  const [selectedTodoIds, setSelectedTodoIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [shellMessage, setShellMessage] = useState("");
 
   useEffect(() => {
@@ -203,6 +236,9 @@ function SuggestAdvicePage() {
       generateAdviceTodos(query, targetType).then((response) => {
         if (!cancelled) {
           setAdvice(response);
+          setSelectedTodoIds(
+            new Set(response.suggestedTodos.map((todo) => todo.id))
+          );
         }
       });
     }, 450);
@@ -213,39 +249,139 @@ function SuggestAdvicePage() {
     };
   }, [query, targetType]);
 
-  const suggestedTodos = useMemo(() => {
-    if (!advice) return [];
-
-    return [
-      ...advice.suggestedTodos,
-      {
-        id: "mock-checkpoint",
-        title: "Make a weekly checkpoint",
-        description: "Review the plan and adjust the next bubbles.",
-        priority: "medium" as const,
-        heaviness: "light" as const,
-        dueMode: targetType === "habit" ? ("anytime" as const) : undefined,
-        reasoning: "Reflection keeps advice from becoming stale.",
-      },
-    ];
-  }, [advice, targetType]);
+  const suggestedTodos = useMemo(() => advice?.suggestedTodos ?? [], [advice]);
+  const selectedTodos = suggestedTodos.filter((todo) =>
+    selectedTodoIds.has(todo.id)
+  );
 
   const primaryAction =
     targetType === "habit" ? "Make Workspace" : "Make Workspace";
   const actionHint =
     targetType === "habit"
-      ? "Ready to shape these into a habit."
-      : "Ready to shape these into a workflow.";
+      ? `${selectedTodos.length} selected habit bubble${
+          selectedTodos.length === 1 ? "" : "s"
+        } ready.`
+      : `${selectedTodos.length} selected workflow bubble${
+          selectedTodos.length === 1 ? "" : "s"
+        } ready.`;
+
+  function toggleSelectedTodo(todoId: string) {
+    setSelectedTodoIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(todoId)) {
+        nextIds.delete(todoId);
+      } else {
+        nextIds.add(todoId);
+      }
+
+      return nextIds;
+    });
+  }
+
+  function createWorkspaceTodos(parentId: string, parentType: AdviceTarget) {
+    const now = new Date().toISOString();
+
+    return selectedTodos.map<Todo>((todo, index) => ({
+      id: crypto.randomUUID(),
+      parentId,
+      parentType,
+      title: todo.title,
+      description: todo.description ?? todo.reasoning,
+      status: "not_started",
+      x: 180 + (index % 3) * 270,
+      y: 180 + Math.floor(index / 3) * 190,
+      priority: todo.priority,
+      heaviness: todo.heaviness,
+      dueMode: parentType === "habit" ? todo.dueMode ?? "anytime" : undefined,
+      dueTime: undefined,
+      dependencyIds: [],
+      createdAt: now,
+      updatedAt: now,
+    }));
+  }
 
   function handleUseSuggestion() {
+    if (!advice || selectedTodos.length === 0) {
+      setShellMessage("Pick at least one suggested bubble first.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const workspaceTitle = `${targetType === "habit" ? "Habit" : "Workflow"}: ${
+      query.length > 42 ? `${query.slice(0, 42)}...` : query
+    }`;
+    const workspaceId = crypto.randomUUID();
+    const todos = createWorkspaceTodos(workspaceId, targetType);
+
+    if (targetType === "habit") {
+      const habit: Habit = {
+        id: workspaceId,
+        userId: DEMO_USER_ID,
+        type: "habit",
+        title: workspaceTitle,
+        description: advice.summary,
+        createdAt: now,
+        updatedAt: now,
+        todos: [],
+        mode: "build_habit",
+        resetFrequency: "daily",
+        noticeEnabled: true,
+        status: "active",
+      };
+      const nextHabits = [...getStoredHabits(), habit];
+
+      saveStoredHabits(nextHabits);
+      saveToStorage(getHabitTodoStorageKey(workspaceId), todos);
+      appendBehaviourEvent({
+        userId: DEMO_USER_ID,
+        workspaceId,
+        workspaceType: "habit",
+        type: "suggestion_added",
+        metadata: {
+          note: `${query} (${selectedTodos.length} selected habit bubbles)`,
+        },
+      });
+      navigate(`/habit/${workspaceId}`);
+      return;
+    }
+
+    const workflow: Workflow = {
+      id: workspaceId,
+      userId: DEMO_USER_ID,
+      type: "workflow",
+      title: workspaceTitle,
+      description: advice.summary,
+      createdAt: now,
+      updatedAt: now,
+      todos: [],
+      focusMinutes: 25,
+      restMinutes: 5,
+      status: "active",
+    };
+    const nextWorkflows = [...getStoredWorkflows(), workflow];
+
+    saveStoredWorkflows(nextWorkflows);
+    saveToStorage(getWorkflowTodoStorageKey(workspaceId), todos);
+    saveToStorage(getWorkflowRuntimeStorageKey(workspaceId), {
+      status: "active",
+      focusMinutes: 25,
+      restMinutes: 5,
+      timerPhase: "focus",
+      timerSeconds: 25 * 60,
+      timerRunning: false,
+      updatedAt: now,
+    });
     appendBehaviourEvent({
       userId: DEMO_USER_ID,
+      workspaceId,
+      workspaceType: "workflow",
       type: "suggestion_added",
       metadata: {
-        note: `${targetType}: ${query} (${suggestedTodos.length} suggested bubbles)`,
+        note: `${query} (${selectedTodos.length} selected workflow bubbles)`,
       },
     });
-    setShellMessage(`${primaryAction} selected.`);
+    navigate(`/workflow/${workspaceId}`);
   }
 
   return (
@@ -324,6 +460,44 @@ function SuggestAdvicePage() {
                 <p className="mt-2 line-clamp-2 text-xs font-semibold leading-relaxed text-orange-50/55">
                   {advice.summary}
                 </p>
+                {advice.cautions.length > 0 && (
+                  <div className="mt-3 grid gap-1.5">
+                    {advice.cautions.map((caution) => (
+                      <p
+                        key={caution}
+                        className="rounded-xl border border-amber-300/20 bg-amber-500/10 px-3 py-2 text-[10px] font-bold text-amber-100/75"
+                      >
+                        {caution}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="absolute left-5 top-[190px] z-30 hidden w-[min(500px,calc(100%-40px))] rounded-2xl border border-sky-300/15 bg-[#10161d]/92 p-4 shadow-[0_16px_52px_rgba(0,0,0,0.28)] backdrop-blur lg:block">
+                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
+                  Mock source snippets
+                </p>
+                <div className="mt-3 grid max-h-52 gap-2 overflow-y-auto pr-1">
+                  {advice.sources.map((source) => (
+                    <a
+                      key={source.id}
+                      href={source.url}
+                      onClick={(event) => event.preventDefault()}
+                      className="rounded-xl border border-sky-300/12 bg-sky-500/8 p-3 transition hover:border-sky-300/30"
+                    >
+                      <p className="line-clamp-1 text-xs font-black text-sky-50">
+                        {source.title}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-[10px] font-semibold leading-relaxed text-sky-100/55">
+                        {source.snippet}
+                      </p>
+                      <p className="mt-1 text-[9px] font-black uppercase tracking-wide text-sky-200/45">
+                        {source.sourceName ?? "Mock source"}
+                      </p>
+                    </a>
+                  ))}
+                </div>
               </div>
 
               <div className="pointer-events-none absolute bottom-0 left-0 z-20 hidden h-[78%] w-[42%] min-w-[320px] sm:block">
@@ -338,7 +512,13 @@ function SuggestAdvicePage() {
               <div className="absolute bottom-28 left-4 right-4 top-44 z-20 lg:bottom-24 lg:left-[45%] lg:right-6 lg:top-[118px]">
                 <div className="grid h-full grid-cols-2 content-center items-center gap-4 overflow-hidden">
                   {suggestedTodos.map((todo, index) => (
-                    <AdviceBubble key={todo.id} todo={todo} index={index} />
+                    <AdviceBubble
+                      key={todo.id}
+                      todo={todo}
+                      index={index}
+                      selected={selectedTodoIds.has(todo.id)}
+                      onToggle={() => toggleSelectedTodo(todo.id)}
+                    />
                   ))}
                 </div>
               </div>

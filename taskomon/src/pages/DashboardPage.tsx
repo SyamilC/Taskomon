@@ -1,6 +1,8 @@
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
+import taskomonconcern from "../assets/taskomon/Taskomon-Icon-Thinking.png";
+import { getMockUserWorkspaces } from "../services/databaseService";
 import {
   DEMO_USER_ID,
   demoTodos,
@@ -596,6 +598,15 @@ function DashboardPage() {
   const [workflows, setWorkflows] = useState(() => getStoredWorkflows());
   const [modal, setModal] = useState<DashboardModal | null>(null);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_FORM);
+  useEffect(() => {
+    getMockUserWorkspaces()
+      .then((workspaces) => {
+        console.log("[SUPABASE TEST] Loaded workspaces:", workspaces);
+      })
+      .catch((error) => {
+        console.error("[SUPABASE TEST] Failed:", error);
+      });
+  }, []);
   const syncTime = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -1151,7 +1162,7 @@ function DashboardPage() {
                   <div className="absolute right-0 top-0 h-24 w-24 bg-gradient-to-bl from-orange-500/10 to-transparent blur-2xl" />
                   <div className="flex items-start gap-4">
                     <div className="hidden h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl border border-orange-500/30 bg-black/30 md:grid">
-                      <img src={taskomonImage} alt="Taskomon" className="h-full w-full object-cover" />
+                      <img src={taskomonconcern} alt="Taskomon" className="h-full w-full object-cover" />
                     </div>
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-400">

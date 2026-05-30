@@ -51,17 +51,17 @@ function RegisterPage() {
 
         <div className="min-h-0 overflow-hidden p-4 md:p-8">
           <section className="auth-grid relative isolate h-full overflow-hidden rounded-2xl border border-orange-950/45 bg-[#140f0e] shadow-[0_22px_80px_rgba(0,0,0,0.38)]">
-            <div className="pointer-events-none absolute bottom-0 left-0 hidden h-[78%] w-[42%] min-w-[320px] sm:block">
+            <div className="pointer-events-none absolute bottom-0 right-0 hidden h-[78%] w-[42%] min-w-[320px] sm:block">
               <img
                 src={happyTaskomonImage}
                 alt="Happy Taskomon"
-                className="h-full w-full object-contain object-left-bottom drop-shadow-[0_24px_58px_rgba(0,0,0,0.48)]"
+                className="h-full w-full object-contain object-right-bottom drop-shadow-[0_24px_58px_rgba(0,0,0,0.48)]"
               />
             </div>
 
             <form
               onSubmit={handleSubmit}
-              className="clip-auth absolute left-1/2 top-1/2 z-30 w-[min(560px,calc(100%-40px))] -translate-x-1/2 -translate-y-1/2 border border-orange-300/24 bg-[#15100f]/95 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.36)] backdrop-blur md:left-[58%]"
+              className="clip-auth absolute left-1/2 top-1/2 z-30 w-[min(560px,calc(100%-40px))] -translate-x-1/2 -translate-y-1/2 border border-orange-300/24 bg-[#15100f]/95 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.36)] backdrop-blur md:left-[42%]"
             >
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-orange-400">
                 Start fresh
@@ -69,9 +69,6 @@ function RegisterPage() {
               <h2 className="mt-1 text-2xl font-black tracking-tight text-white">
                 Create your Taskomon account
               </h2>
-              <p className="mt-1 text-sm font-semibold text-orange-50/55">
-                Make a shell profile for habits and workflows.
-              </p>
 
               <div className="mt-5 grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
