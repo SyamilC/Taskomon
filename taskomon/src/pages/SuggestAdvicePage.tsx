@@ -123,16 +123,26 @@ function getAdviceBubbleDimensions(todo: SuggestedTodo) {
   };
 }
 
+function getAdviceBubbleScale(todoCount: number) {
+  if (todoCount <= 4) return 1;
+  if (todoCount <= 6) return 0.9;
+  if (todoCount <= 8) return 0.8;
+
+  return 0.72;
+}
+
 function AdviceBubble({
   todo,
   index,
   selected,
   onToggle,
+  scale,
 }: {
   todo: SuggestedTodo;
   index: number;
   selected: boolean;
   onToggle: () => void;
+  scale: number;
 }) {
   const priorityStyle = PRIORITY_STYLE[todo.priority];
   const heavinessStyle = HEAVINESS_STYLE[todo.heaviness];
@@ -152,8 +162,8 @@ function AdviceBubble({
         heavinessStyle.ring,
       ].join(" ")}
       style={{
-        width: dimensions.width,
-        height: dimensions.height,
+        width: dimensions.width * scale,
+        height: dimensions.height * scale,
         animationDelay: `${index * 160}ms`,
       }}
     >
@@ -182,10 +192,10 @@ function AdviceBubble({
       <div className="pointer-events-none absolute -right-6 -top-6 h-20 w-20 rounded-full bg-emerald-300/18 blur-2xl" />
 
       <div className="relative z-10 flex h-full flex-col items-center justify-center">
-        <p className="line-clamp-3 text-[11px] font-black leading-tight text-neutral-50 [overflow-wrap:anywhere]">
+        <p className="line-clamp-3 text-[10px] font-black leading-tight text-neutral-50 [overflow-wrap:anywhere] sm:text-[11px]">
           {todo.title}
         </p>
-        <p className="mt-1 line-clamp-2 text-[10px] font-bold text-emerald-50/62 [overflow-wrap:anywhere]">
+        <p className="mt-1 line-clamp-2 text-[9px] font-bold text-emerald-50/62 [overflow-wrap:anywhere] sm:text-[10px]">
           {todo.description}
         </p>
         <div className="mt-2 flex flex-wrap justify-center gap-1">
@@ -227,6 +237,7 @@ function SuggestAdvicePage() {
   const [selectedTodoIds, setSelectedTodoIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [shellMessage, setShellMessage] = useState("");
 
   useEffect(() => {
@@ -250,6 +261,7 @@ function SuggestAdvicePage() {
   }, [query, targetType]);
 
   const suggestedTodos = useMemo(() => advice?.suggestedTodos ?? [], [advice]);
+  const bubbleScale = getAdviceBubbleScale(suggestedTodos.length);
   const selectedTodos = suggestedTodos.filter((todo) =>
     selectedTodoIds.has(todo.id)
   );
@@ -404,6 +416,17 @@ function SuggestAdvicePage() {
           .advice-float {
             animation: floatAdvice 3.8s ease-in-out infinite;
           }
+          .advice-scrollbar::-webkit-scrollbar {
+            width: 8px;
+          }
+          .advice-scrollbar::-webkit-scrollbar-track {
+            background: rgba(12, 9, 8, 0.72);
+            border-radius: 999px;
+          }
+          .advice-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(249, 115, 22, 0.34);
+            border-radius: 999px;
+          }
         `}
       </style>
 
@@ -474,31 +497,13 @@ function SuggestAdvicePage() {
                 )}
               </div>
 
-              <div className="absolute left-5 top-[190px] z-30 hidden w-[min(500px,calc(100%-40px))] rounded-2xl border border-sky-300/15 bg-[#10161d]/92 p-4 shadow-[0_16px_52px_rgba(0,0,0,0.28)] backdrop-blur lg:block">
-                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
-                  Mock source snippets
-                </p>
-                <div className="mt-3 grid max-h-52 gap-2 overflow-y-auto pr-1">
-                  {advice.sources.map((source) => (
-                    <a
-                      key={source.id}
-                      href={source.url}
-                      onClick={(event) => event.preventDefault()}
-                      className="rounded-xl border border-sky-300/12 bg-sky-500/8 p-3 transition hover:border-sky-300/30"
-                    >
-                      <p className="line-clamp-1 text-xs font-black text-sky-50">
-                        {source.title}
-                      </p>
-                      <p className="mt-1 line-clamp-2 text-[10px] font-semibold leading-relaxed text-sky-100/55">
-                        {source.snippet}
-                      </p>
-                      <p className="mt-1 text-[9px] font-black uppercase tracking-wide text-sky-200/45">
-                        {source.sourceName ?? "Mock source"}
-                      </p>
-                    </a>
-                  ))}
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={() => setSourcesOpen(true)}
+                className="absolute right-5 top-5 z-40 rounded-xl border border-sky-300/25 bg-sky-500/10 px-4 py-2 text-xs font-black uppercase text-sky-100 shadow-[0_12px_34px_rgba(0,0,0,0.28)] transition hover:bg-sky-500/20"
+              >
+                Sources
+              </button>
 
               <div className="pointer-events-none absolute bottom-0 left-0 z-20 hidden h-[78%] w-[42%] min-w-[320px] sm:block">
                 <img
@@ -510,7 +515,7 @@ function SuggestAdvicePage() {
               </div>
 
               <div className="absolute bottom-28 left-4 right-4 top-44 z-20 lg:bottom-24 lg:left-[45%] lg:right-6 lg:top-[118px]">
-                <div className="grid h-full grid-cols-2 content-center items-center gap-4 overflow-hidden">
+                <div className="advice-scrollbar grid h-full grid-cols-2 content-center items-center justify-items-center gap-3 overflow-y-auto overflow-x-hidden pr-1 xl:grid-cols-3">
                   {suggestedTodos.map((todo, index) => (
                     <AdviceBubble
                       key={todo.id}
@@ -518,6 +523,7 @@ function SuggestAdvicePage() {
                       index={index}
                       selected={selectedTodoIds.has(todo.id)}
                       onToggle={() => toggleSelectedTodo(todo.id)}
+                      scale={bubbleScale}
                     />
                   ))}
                 </div>
@@ -547,6 +553,54 @@ function SuggestAdvicePage() {
               {shellMessage && (
                 <div className="absolute right-6 top-6 z-40 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 px-4 py-3 text-sm font-black text-emerald-100 shadow-[0_18px_60px_rgba(0,0,0,0.36)]">
                   {shellMessage}
+                </div>
+              )}
+
+              {sourcesOpen && (
+                <div className="absolute inset-0 z-50 grid place-items-center bg-black/60 px-4 backdrop-blur-sm">
+                  <section className="w-full max-w-2xl rounded-2xl border border-sky-300/25 bg-[#10161d]/98 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.55)]">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
+                          Mock source snippets
+                        </p>
+                        <h2 className="mt-1 text-lg font-black text-white">
+                          Search structure
+                        </h2>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSourcesOpen(false)}
+                        className="rounded-full border border-sky-300/20 bg-sky-500/10 px-3 py-1.5 text-[10px] font-black uppercase text-sky-100/70 transition hover:bg-sky-500/20"
+                      >
+                        Close
+                      </button>
+                    </div>
+
+                    <div className="advice-scrollbar mt-4 grid max-h-[58vh] gap-3 overflow-y-auto pr-2">
+                      {advice.sources.map((source) => (
+                        <article
+                          key={source.id}
+                          className="rounded-2xl border border-sky-300/14 bg-sky-500/8 p-4"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <p className="text-sm font-black text-sky-50">
+                              {source.title}
+                            </p>
+                            <span className="rounded-full border border-sky-300/18 bg-black/20 px-2 py-0.5 text-[9px] font-black uppercase text-sky-200/55">
+                              {source.sourceName ?? "Mock source"}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-xs font-semibold leading-relaxed text-sky-100/65">
+                            {source.snippet}
+                          </p>
+                          <p className="mt-2 break-all text-[10px] font-bold text-sky-200/35">
+                            {source.url}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
                 </div>
               )}
             </section>
