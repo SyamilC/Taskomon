@@ -5,8 +5,8 @@ import { loginLocal, startGuestSession } from "../services/authService";
 
 function LoginPage() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("demo@taskomon.local");
-  const [password, setPassword] = useState("taskomon");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -115,21 +115,6 @@ function LoginPage() {
                 </label>
               </div>
 
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <label className="flex items-center gap-2 text-xs font-bold text-orange-100/60">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-orange-300/30 bg-[#0f0a09] accent-orange-500"
-                  />
-                  Remember me
-                </label>
-                <button
-                  type="button"
-                  className="text-xs font-black uppercase text-sky-200/70 transition hover:text-sky-100"
-                >
-                  Forgot?
-                </button>
-              </div>
 
               <button
                 type="submit"
