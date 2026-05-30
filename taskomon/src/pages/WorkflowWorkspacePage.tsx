@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import taskomonFrontFaceImage from "../assets/taskomon/Taskomon-FrontFace.png";
 import taskomonHappyImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
 import taskomonThinkingImage from "../assets/taskomon/Taskomon-Icon-Thinking.png";
@@ -11,6 +11,11 @@ import {
   appendBehaviourEvent,
   loadBehaviourEvents,
 } from "../services/behaviourService";
+import {
+  getCurrentSession,
+  getSessionDisplayName,
+  isGuestSession,
+} from "../services/authService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import {
   createBehaviourSnapshot,
@@ -520,6 +525,16 @@ function WorkflowBubble({
 }
 
 function WorkflowWorkspacePage() {
+  const session = getCurrentSession();
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <WorkflowWorkspaceContent />;
+}
+
+function WorkflowWorkspaceContent() {
   const navigate = useNavigate();
   const { workflowId: routeWorkflowId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -531,6 +546,7 @@ function WorkflowWorkspacePage() {
   const workflow =
     workflowList.find((workflowItem) => workflowItem.id === activeWorkflowId) ??
     workflowList[0];
+  const isGuest = isGuestSession();
   const workflowStorageKey = getWorkflowTodoStorageKey(workflow.id);
   const workflowRuntimeStorageKey = getWorkflowRuntimeStorageKey(workflow.id);
   const storedRuntime = loadFromStorage<WorkflowRuntime>(
@@ -563,7 +579,7 @@ function WorkflowWorkspacePage() {
   });
   const [lastCompletionTitle, setLastCompletionTitle] = useState("");
   const [behaviourEvents, setBehaviourEvents] = useState(() =>
-    loadBehaviourEvents(DEMO_USER_ID, workflow.id)
+    isGuest ? [] : loadBehaviourEvents(DEMO_USER_ID, workflow.id)
   );
   const [timerPhase, setTimerPhase] = useState<PomodoroPhase>(storedTimer.phase);
   const [timerSeconds, setTimerSeconds] = useState(
@@ -626,6 +642,10 @@ function WorkflowWorkspacePage() {
       note?: string;
     } = {}
   ) {
+    if (isGuest) {
+      return undefined;
+    }
+
     if (
       runtime.status === "held" &&
       type !== "workflow_held" &&
@@ -705,6 +725,10 @@ function WorkflowWorkspacePage() {
   }, [workflow.id]);
 
   useEffect(() => {
+    if (isGuest) {
+      return;
+    }
+
     appendBehaviourEvent({
       userId: DEMO_USER_ID,
       workspaceId: workflow.id,
@@ -717,7 +741,7 @@ function WorkflowWorkspacePage() {
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [workflow.id]);
+  }, [isGuest, workflow.id]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -797,20 +821,22 @@ function WorkflowWorkspacePage() {
         }
 
         if (timerPhase === "focus") {
-          const timerEvent = appendBehaviourEvent({
-            userId: DEMO_USER_ID,
-            workspaceId: workflow.id,
-            workspaceType: "workflow",
-            type: "timer_completed",
-            metadata: {
-              timeSpentSeconds: runtime.focusMinutes * 60,
-              note: "Focus interval completed.",
-            },
-          });
+          if (!isGuest) {
+            const timerEvent = appendBehaviourEvent({
+              userId: DEMO_USER_ID,
+              workspaceId: workflow.id,
+              workspaceType: "workflow",
+              type: "timer_completed",
+              metadata: {
+                timeSpentSeconds: runtime.focusMinutes * 60,
+                note: "Focus interval completed.",
+              },
+            });
 
-          setBehaviourEvents((currentEvents) =>
-            [...currentEvents, timerEvent].slice(-500)
-          );
+            setBehaviourEvents((currentEvents) =>
+              [...currentEvents, timerEvent].slice(-500)
+            );
+          }
           setTimerPhase("rest");
           setTaskomonNoticeState({
             workflowId: workflow.id,
@@ -819,20 +845,22 @@ function WorkflowWorkspacePage() {
           return runtime.restMinutes * 60;
         }
 
-        const restEvent = appendBehaviourEvent({
-          userId: DEMO_USER_ID,
-          workspaceId: workflow.id,
-          workspaceType: "workflow",
-          type: "rest_taken",
-          metadata: {
-            timeSpentSeconds: runtime.restMinutes * 60,
-            note: "Rest interval completed.",
-          },
-        });
+        if (!isGuest) {
+          const restEvent = appendBehaviourEvent({
+            userId: DEMO_USER_ID,
+            workspaceId: workflow.id,
+            workspaceType: "workflow",
+            type: "rest_taken",
+            metadata: {
+              timeSpentSeconds: runtime.restMinutes * 60,
+              note: "Rest interval completed.",
+            },
+          });
 
-        setBehaviourEvents((currentEvents) =>
-          [...currentEvents, restEvent].slice(-500)
-        );
+          setBehaviourEvents((currentEvents) =>
+            [...currentEvents, restEvent].slice(-500)
+          );
+        }
         setTimerPhase("focus");
         setTaskomonNoticeState({
           workflowId: workflow.id,
@@ -844,6 +872,7 @@ function WorkflowWorkspacePage() {
 
     return () => window.clearInterval(intervalId);
   }, [
+    isGuest,
     runtime.focusMinutes,
     runtime.restMinutes,
     runtime.status,
@@ -876,17 +905,23 @@ function WorkflowWorkspacePage() {
           100
         );
   const behaviourSnapshot = useMemo(
-    () => createBehaviourSnapshot({ todos, events: behaviourEvents }),
-    [behaviourEvents, todos]
+    () =>
+      createBehaviourSnapshot({
+        todos: isGuest ? [] : todos,
+        events: isGuest ? [] : behaviourEvents,
+      }),
+    [behaviourEvents, isGuest, todos]
   );
   const workflowIsHeld = runtime.status === "held";
   const workflowIsCompleted = runtime.status === "completed";
-  const taskomonMood = workflowIsHeld
+  const taskomonMood = isGuest || workflowIsHeld
     ? "neutral"
     : getTaskomonMood(behaviourSnapshot);
   const taskomonStyle = getTaskomonMoodStyle(taskomonMood);
   const taskomonMoodImage = TASKOMON_MOOD_IMAGE[taskomonMood];
-  const taskomonThought = workflowIsHeld
+  const taskomonThought = isGuest
+    ? "Guest workflow mode is local-only. I can keep the board moving, but I won't analyse your behaviour here."
+    : workflowIsHeld
     ? "Workflow is held. I won't monitor or analyse these bubbles until you resume."
     : workflowIsCompleted
     ? "Workflow complete. Monitoring is quiet for this session."
@@ -1521,8 +1556,12 @@ function WorkflowWorkspacePage() {
                 />
               </div>
               <div>
-                <p className="text-sm font-bold text-orange-50">Syamil</p>
-                <p className="text-[11px] text-amber-300/80">Workflow workspace</p>
+                <p className="text-sm font-bold text-orange-50">
+                  {isGuest ? "Guest" : getSessionDisplayName()}
+                </p>
+                <p className="text-[11px] text-amber-300/80">
+                  {isGuest ? "Workflow only" : "Workflow workspace"}
+                </p>
               </div>
             </div>
           </div>

@@ -11,6 +11,14 @@ import type {
 
 export const MOCK_USER_ID = "00000000-0000-0000-0000-000000000001";
 
+function getSupabaseClient() {
+  if (!supabase) {
+    throw new Error("Supabase is not configured. Running in local demo mode.");
+  }
+
+  return supabase;
+}
+
 function mapTodoRow(row: TodoRow, dependencyIds: string[]): Todo {
   return {
     id: row.id,
@@ -79,7 +87,10 @@ function mapWorkspaceRow(row: WorkspaceRow, todos: Todo[]): Habit | Workflow {
 }
 
 export async function getMockUserWorkspaces(): Promise<Array<Habit | Workflow>> {
-  const { data: workspaceRows, error: workspaceError } = await supabase
+  if (!supabase) return [];
+
+  const client = getSupabaseClient();
+  const { data: workspaceRows, error: workspaceError } = await client
     .from("workspaces")
     .select("*")
     .eq("user_id", MOCK_USER_ID)
@@ -91,14 +102,14 @@ export async function getMockUserWorkspaces(): Promise<Array<Habit | Workflow>> 
 
   if (workspaceIds.length === 0) return [];
 
-  const { data: todoRows, error: todoError } = await supabase
+  const { data: todoRows, error: todoError } = await client
     .from("todos")
     .select("*")
     .in("workspace_id", workspaceIds);
 
   if (todoError) throw todoError;
 
-  const { data: dependencyRows, error: dependencyError } = await supabase
+  const { data: dependencyRows, error: dependencyError } = await client
     .from("todo_dependencies")
     .select("*");
 
@@ -150,7 +161,8 @@ export async function updateBackendTodoPosition(
   x: number,
   y: number
 ): Promise<void> {
-  const { error } = await supabase
+  const client = getSupabaseClient();
+  const { error } = await client
     .from("todos")
     .update({
       x,
@@ -168,7 +180,8 @@ export async function updateBackendTodoStatus(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  const { error } = await supabase
+  const client = getSupabaseClient();
+  const { error } = await client
     .from("todos")
     .update({
       status,
@@ -188,7 +201,8 @@ export async function createBackendTodo(input: {
   x: number;
   y: number;
 }): Promise<Todo> {
-  const { data, error } = await supabase
+  const client = getSupabaseClient();
+  const { data, error } = await client
     .from("todos")
     .insert({
       workspace_id: input.workspaceId,

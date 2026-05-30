@@ -1,4 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
+import { isGuestSession } from "../services/authService";
 
 function NavItem({
   active,
@@ -38,29 +39,35 @@ function NavItem({
 
 function NavBar() {
   const location = useLocation();
+  const isGuest = isGuestSession();
+  const dashboardPath = isGuest ? "/guest" : "/dashboard";
 
   return (
     <nav className="mt-20 flex flex-col gap-3 px-1">
       <NavItem
-        active={location.pathname === "/dashboard"}
+        active={location.pathname === dashboardPath}
         label="Dashboard"
-        to="/dashboard"
+        to={dashboardPath}
       />
-      <NavItem
-        active={location.pathname.startsWith("/habit")}
-        label="Habit"
-        to="/habit"
-      />
+      {!isGuest && (
+        <NavItem
+          active={location.pathname.startsWith("/habit")}
+          label="Habit"
+          to="/habit"
+        />
+      )}
       <NavItem
         active={location.pathname.startsWith("/workflow")}
         label="Workflow"
         to="/workflow"
       />
-      <NavItem
-        active={location.pathname.startsWith("/advice")}
-        label="Advice"
-        to="/advice"
-      />
+      {!isGuest && (
+        <NavItem
+          active={location.pathname.startsWith("/advice")}
+          label="Advice"
+          to="/advice"
+        />
+      )}
     </nav>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, WheelEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import taskomonFrontFaceImage from "../assets/taskomon/Taskomon-FrontFace.png";
 import taskomonHappyImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
 import taskomonThinkingImage from "../assets/taskomon/Taskomon-Icon-Thinking.png";
@@ -11,6 +11,7 @@ import {
   appendBehaviourEvent,
   loadBehaviourEvents,
 } from "../services/behaviourService";
+import { getCurrentSession } from "../services/authService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import {
   createBehaviourSnapshot,
@@ -534,6 +535,20 @@ function HabitBubble({
 }
 
 function HabitWorkspacePage() {
+  const session = getCurrentSession();
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (session.mode === "guest") {
+    return <Navigate to="/guest" replace />;
+  }
+
+  return <HabitWorkspaceContent />;
+}
+
+function HabitWorkspaceContent() {
   const navigate = useNavigate();
   const { habitId: routeHabitId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);

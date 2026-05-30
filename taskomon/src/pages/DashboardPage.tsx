@@ -1,7 +1,14 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
 import taskomonconcern from "../assets/taskomon/Taskomon-Icon-Thinking.png";
+import { isSupabaseConfigured } from "../lib/supabaseClient";
+import {
+  getBackendMode,
+  getCurrentSession,
+  getSessionDisplayName,
+  logout,
+} from "../services/authService";
 import { getMockUserWorkspaces } from "../services/databaseService";
 import {
   DEMO_USER_ID,
@@ -594,11 +601,32 @@ const DEFAULT_WORKSPACE_FORM: WorkspaceFormState = {
 };
 
 function DashboardPage() {
+  const currentSession = getCurrentSession();
+
+  if (currentSession?.mode === "guest") {
+    return <Navigate to="/guest" replace />;
+  }
+
+  if (!currentSession) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <AuthenticatedDashboardPage initialSession={currentSession} />;
+}
+
+function AuthenticatedDashboardPage({
+  initialSession,
+}: {
+  initialSession: ReturnType<typeof getCurrentSession>;
+}) {
   const [habits, setHabits] = useState(() => getStoredHabits());
   const [workflows, setWorkflows] = useState(() => getStoredWorkflows());
   const [modal, setModal] = useState<DashboardModal | null>(null);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_FORM);
+  const [authSession, setAuthSession] = useState(initialSession);
   useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
     getMockUserWorkspaces()
       .then((workspaces) => {
         console.log("[SUPABASE TEST] Loaded workspaces:", workspaces);
@@ -836,6 +864,14 @@ function DashboardPage() {
       : modal?.type === "report"
       ? "Behaviour Report"
       : "";
+  const userName = authSession ? getSessionDisplayName(authSession) : "Not signed in";
+  const backendMode = getBackendMode();
+
+  function handleLogout() {
+    logout();
+    setAuthSession(null);
+    window.location.assign("/login");
+  }
 
   function openCreateHabitModal() {
     setWorkspaceForm({
@@ -1110,24 +1146,18 @@ function DashboardPage() {
                 />
               </div>
               <div>
-                <p className="text-sm font-bold text-orange-50">Syamil</p>
-                <p className="text-[11px] text-amber-300/80">Command deck</p>
+                <p className="text-sm font-bold text-orange-50">{userName}</p>
+                <p className="text-[11px] text-amber-300/80">
+                  {backendMode === "supabase" ? "Supabase profile" : "Local profile"}
+                </p>
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <Link
-                to="/login"
-                className="rounded-lg border border-sky-300/20 bg-sky-500/10 px-2 py-1.5 text-center text-[10px] font-black uppercase text-sky-100/70 transition hover:bg-sky-500/20"
-              >
-                Login
-              </Link>
-              <Link
-                to="/register"
-                className="rounded-lg border border-emerald-300/20 bg-emerald-500/10 px-2 py-1.5 text-center text-[10px] font-black uppercase text-emerald-100/70 transition hover:bg-emerald-500/20"
-              >
-                Register
-              </Link>
-            </div>
+            <button
+              onClick={handleLogout}
+              className="mt-3 w-full rounded-lg border border-orange-300/20 bg-orange-500/10 px-2 py-1.5 text-center text-[10px] font-black uppercase text-orange-100/70 transition hover:bg-orange-500/20"
+            >
+              Logout
+            </button>
           </div>
         </aside>
 

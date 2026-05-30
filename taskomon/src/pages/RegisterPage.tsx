@@ -1,10 +1,30 @@
-import type { FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import happyTaskomonImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
+import { registerLocal } from "../services/authService";
 
 function RegisterPage() {
+  const navigate = useNavigate();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [message, setMessage] = useState("");
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (password !== confirmPassword) {
+      setMessage("The passwords do not match yet.");
+      return;
+    }
+
+    try {
+      registerLocal({ name, email, password });
+      navigate("/dashboard");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Register failed.");
+    }
   }
 
   return (
@@ -74,6 +94,8 @@ function RegisterPage() {
                 <label className="grid gap-1 text-[10px] font-black uppercase tracking-wide text-orange-100/55">
                   Name
                   <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
                     placeholder="Syamil"
                     className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
                   />
@@ -83,6 +105,8 @@ function RegisterPage() {
                   Email
                   <input
                     type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
                     placeholder="you@example.com"
                     className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
                   />
@@ -92,6 +116,8 @@ function RegisterPage() {
                   Password
                   <input
                     type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     placeholder="Password"
                     className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
                   />
@@ -101,6 +127,8 @@ function RegisterPage() {
                   Confirm
                   <input
                     type="password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
                     placeholder="Password again"
                     className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
                   />
@@ -121,6 +149,12 @@ function RegisterPage() {
               >
                 Register
               </button>
+
+              {message && (
+                <p className="mt-3 rounded-xl border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">
+                  {message}
+                </p>
+              )}
 
               <div className="mt-4 flex items-center justify-center gap-2 text-xs font-semibold text-orange-100/55">
                 <span>Already have one?</span>

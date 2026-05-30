@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import AskAdvicePage from "./pages/AskAdvicePage";
 import DashboardPage from "./pages/DashboardPage";
+import GuestDashboardPage from "./pages/GuestDashboardPage";
 import HabitWorkspacePage from "./pages/HabitWorkspacePage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
@@ -13,8 +14,9 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/guest" element={<GuestDashboardPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/advice" element={<AskAdvicePage />} />

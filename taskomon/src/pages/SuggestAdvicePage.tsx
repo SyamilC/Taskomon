@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import adviceImage from "../assets/taskomon/Taskomon-Advice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
 import { DEMO_USER_ID } from "../data/demoData";
 import { generateAdviceTodos } from "../services/adviceService";
+import { getCurrentSession } from "../services/authService";
 import { appendBehaviourEvent } from "../services/behaviourService";
 import { saveToStorage } from "../services/storageServices";
 import {
@@ -222,6 +223,20 @@ function AdviceBubble({
 }
 
 function SuggestAdvicePage() {
+  const session = getCurrentSession();
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (session.mode === "guest") {
+    return <Navigate to="/guest" replace />;
+  }
+
+  return <SuggestAdviceContent />;
+}
+
+function SuggestAdviceContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const routeState = getRouteState(location.state);

@@ -1,4 +1,4 @@
-import { demoHabits, demoWorkflows } from "../data/demoData";
+import { localSeed } from "../data/localSeed";
 import type { Habit, PomodoroPhase, Todo, Workflow } from "../types";
 import { loadFromStorage, removeFromStorage, saveToStorage } from "./storageServices";
 
@@ -56,7 +56,7 @@ function normalizeHabit(habit: Habit): Habit {
 }
 
 export function getStoredHabits() {
-  return loadFromStorage<Habit[]>(HABITS_STORAGE_KEY, demoHabits).map(
+  return loadFromStorage<Habit[]>(HABITS_STORAGE_KEY, localSeed.habits).map(
     normalizeHabit
   );
 }
@@ -66,7 +66,7 @@ export function saveStoredHabits(habits: Habit[]) {
 }
 
 export function getStoredWorkflows() {
-  return loadFromStorage<Workflow[]>(WORKFLOWS_STORAGE_KEY, demoWorkflows);
+  return loadFromStorage<Workflow[]>(WORKFLOWS_STORAGE_KEY, localSeed.workflows);
 }
 
 export function saveStoredWorkflows(workflows: Workflow[]) {

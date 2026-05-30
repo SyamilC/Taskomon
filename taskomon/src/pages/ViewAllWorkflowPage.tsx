@@ -1,6 +1,11 @@
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
 import { demoTodos } from "../data/demoData";
+import {
+  getCurrentSession,
+  getSessionDisplayName,
+  isGuestSession,
+} from "../services/authService";
 import { loadFromStorage } from "../services/storageServices";
 import {
   getDefaultWorkflowRuntime,
@@ -34,6 +39,13 @@ function getProgress(todos: Todo[]) {
 }
 
 function ViewAllWorkflowPage() {
+  const session = getCurrentSession();
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  const isGuest = isGuestSession();
   const workflows = getStoredWorkflows();
   const summaries = workflows.map((workflow) => {
     const todos = getWorkflowTodos(workflow);
@@ -88,8 +100,12 @@ function ViewAllWorkflowPage() {
                 />
               </div>
               <div>
-                <p className="text-sm font-bold text-orange-50">Syamil</p>
-                <p className="text-[11px] text-amber-300/80">Workflow index</p>
+                <p className="text-sm font-bold text-orange-50">
+                  {isGuest ? "Guest" : getSessionDisplayName()}
+                </p>
+                <p className="text-[11px] text-amber-300/80">
+                  {isGuest ? "Workflow only" : "Workflow index"}
+                </p>
               </div>
             </div>
           </div>

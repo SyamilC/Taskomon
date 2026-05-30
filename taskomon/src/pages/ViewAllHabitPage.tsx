@@ -1,7 +1,8 @@
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
 import { demoTodos } from "../data/demoData";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
+import { getCurrentSession } from "../services/authService";
 import {
   applyHabitAutoReset,
   getHabitTodoStorageKey,
@@ -45,6 +46,16 @@ function getHabitLabel(habit: Habit) {
 }
 
 function ViewAllHabitPage() {
+  const session = getCurrentSession();
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (session.mode === "guest") {
+    return <Navigate to="/guest" replace />;
+  }
+
   const habits = getStoredHabits();
   const summaries = habits.map((habit) => {
     const todos = getHabitTodos(habit);

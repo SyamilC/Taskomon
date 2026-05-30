@@ -1,9 +1,10 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import lookupAdviceImage from "../assets/taskomon/Taskomon-LookupAdvice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
 import { DEMO_USER_ID } from "../data/demoData";
+import { getCurrentSession } from "../services/authService";
 import { appendBehaviourEvent } from "../services/behaviourService";
 
 type AdviceTarget = "workflow" | "habit";
@@ -17,6 +18,20 @@ const EXAMPLE_PROMPTS = [
 ];
 
 function AskAdvicePage() {
+  const session = getCurrentSession();
+
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (session.mode === "guest") {
+    return <Navigate to="/guest" replace />;
+  }
+
+  return <AskAdviceContent />;
+}
+
+function AskAdviceContent() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [targetType, setTargetType] = useState<AdviceTarget>("habit");

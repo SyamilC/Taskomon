@@ -1,10 +1,28 @@
-import type { FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import lookupAdviceImage from "../assets/taskomon/Taskomon-LookupAdvice.png";
+import { loginLocal, startGuestSession } from "../services/authService";
 
 function LoginPage() {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("demo@taskomon.local");
+  const [password, setPassword] = useState("taskomon");
+  const [message, setMessage] = useState("");
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    try {
+      loginLocal(email, password);
+      navigate("/dashboard");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Login failed.");
+    }
+  }
+
+  function handleGuestMode() {
+    startGuestSession();
+    navigate("/guest");
   }
 
   return (
@@ -78,6 +96,8 @@ function LoginPage() {
                   Email
                   <input
                     type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
                     placeholder="you@example.com"
                     className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
                   />
@@ -87,6 +107,8 @@ function LoginPage() {
                   Password
                   <input
                     type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     placeholder="Password"
                     className="rounded-xl border border-orange-300/20 bg-[#0f0a09] px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-orange-50 outline-none placeholder:text-orange-100/25 focus:border-orange-300/60"
                   />
@@ -115,6 +137,20 @@ function LoginPage() {
               >
                 Login
               </button>
+
+              <button
+                type="button"
+                onClick={handleGuestMode}
+                className="mt-2 w-full rounded-xl border border-orange-300/20 bg-orange-500/10 px-4 py-3 text-xs font-black uppercase text-orange-100 transition hover:bg-orange-500/20"
+              >
+                Continue as Guest
+              </button>
+
+              {message && (
+                <p className="mt-3 rounded-xl border border-red-300/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-100">
+                  {message}
+                </p>
+              )}
 
               <div className="mt-4 flex items-center justify-center gap-2 text-xs font-semibold text-orange-100/55">
                 <span>New here?</span>
