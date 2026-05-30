@@ -5,14 +5,21 @@ Taskomon is a productivity web app that turns tasks into free-flowing workspace 
 The product is designed to work as a prototype without requiring backend setup. It can run fully in local.
 
 ## Running the Project Locally
-1. Clone the repository
+#### Clone the repository
+
 git clone https://github.com/SyamilC/Taskomon
 
 cd taskomon
-1. Install dependencies
+
+#### Install dependencies
+
 npm install
-1. Run the development server
+
+#### Run the development server
+
 npm run dev
+
+
 
 Open the localhost link shown in the terminal, usually:
 
