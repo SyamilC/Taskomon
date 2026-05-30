@@ -1104,12 +1104,18 @@ function DashboardPage() {
               </div>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <button className="rounded-lg border border-sky-300/20 bg-sky-500/10 px-2 py-1.5 text-[10px] font-black uppercase text-sky-100/70">
+              <Link
+                to="/login"
+                className="rounded-lg border border-sky-300/20 bg-sky-500/10 px-2 py-1.5 text-center text-[10px] font-black uppercase text-sky-100/70 transition hover:bg-sky-500/20"
+              >
                 Login
-              </button>
-              <button className="rounded-lg border border-emerald-300/20 bg-emerald-500/10 px-2 py-1.5 text-[10px] font-black uppercase text-emerald-100/70">
+              </Link>
+              <Link
+                to="/register"
+                className="rounded-lg border border-emerald-300/20 bg-emerald-500/10 px-2 py-1.5 text-center text-[10px] font-black uppercase text-emerald-100/70 transition hover:bg-emerald-500/20"
+              >
                 Register
-              </button>
+              </Link>
             </div>
           </div>
         </aside>

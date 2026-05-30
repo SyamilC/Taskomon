@@ -2,6 +2,8 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import AskAdvicePage from "./pages/AskAdvicePage";
 import DashboardPage from "./pages/DashboardPage";
 import HabitWorkspacePage from "./pages/HabitWorkspacePage";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
 import SuggestAdvicePage from "./pages/SuggestAdvicePage";
 import ViewAllHabitPage from "./pages/ViewAllHabitPage";
 import ViewAllWorkflowPage from "./pages/ViewAllWorkflowPage";
@@ -13,6 +15,8 @@ function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
         <Route path="/advice" element={<AskAdvicePage />} />
         <Route path="/advice/suggest" element={<SuggestAdvicePage />} />
         <Route path="/habits" element={<ViewAllHabitPage />} />
