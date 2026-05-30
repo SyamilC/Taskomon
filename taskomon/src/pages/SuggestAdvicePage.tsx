@@ -280,11 +280,12 @@ function SuggestAdviceContent() {
   const selectedTodos = suggestedTodos.filter((todo) =>
     selectedTodoIds.has(todo.id)
   );
+  const resolvedTargetType = advice?.targetType ?? targetType;
 
   const primaryAction =
-    targetType === "habit" ? "Make Workspace" : "Make Workspace";
+    resolvedTargetType === "habit" ? "Make Workspace" : "Make Workspace";
   const actionHint =
-    targetType === "habit"
+    resolvedTargetType === "habit"
       ? `${selectedTodos.length} selected habit bubble${
           selectedTodos.length === 1 ? "" : "s"
         } ready.`
@@ -335,13 +336,13 @@ function SuggestAdviceContent() {
     }
 
     const now = new Date().toISOString();
-    const workspaceTitle = `${targetType === "habit" ? "Habit" : "Workflow"}: ${
+    const workspaceTitle = `${resolvedTargetType === "habit" ? "Habit" : "Workflow"}: ${
       query.length > 42 ? `${query.slice(0, 42)}...` : query
     }`;
     const workspaceId = crypto.randomUUID();
-    const todos = createWorkspaceTodos(workspaceId, targetType);
+    const todos = createWorkspaceTodos(workspaceId, resolvedTargetType);
 
-    if (targetType === "habit") {
+    if (resolvedTargetType === "habit") {
       const habit: Habit = {
         id: workspaceId,
         userId: DEMO_USER_ID,
@@ -366,7 +367,7 @@ function SuggestAdviceContent() {
         workspaceType: "habit",
         type: "suggestion_added",
         metadata: {
-          note: `${query} (${selectedTodos.length} selected habit bubbles)`,
+                        note: `${query} (${selectedTodos.length} selected habit bubbles)`,
         },
       });
       navigate(`/habit/${workspaceId}`);
@@ -577,7 +578,7 @@ function SuggestAdviceContent() {
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <p className="text-[10px] font-black uppercase tracking-[0.22em] text-sky-200">
-                          Mock source snippets
+                          Knowledge snippets
                         </p>
                         <h2 className="mt-1 text-lg font-black text-white">
                           Search structure
@@ -603,7 +604,7 @@ function SuggestAdviceContent() {
                               {source.title}
                             </p>
                             <span className="rounded-full border border-sky-300/18 bg-black/20 px-2 py-0.5 text-[9px] font-black uppercase text-sky-200/55">
-                              {source.sourceName ?? "Mock source"}
+                              {source.sourceName ?? "Local source"}
                             </span>
                           </div>
                           <p className="mt-2 text-xs font-semibold leading-relaxed text-sky-100/65">
