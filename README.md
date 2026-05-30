@@ -6,18 +6,18 @@ The product is designed to work as a prototype without requiring backend setup. 
 
 ## Running the Project Locally
 ### Clone the repository  
-'''
+```
 git clone https://github.com/SyamilC/Taskomon  
 cd taskomon  
-'''
+```
 ### Install dependencies  
-'''
+```
 npm install
-'''
+```
 ### Run the development server  
-'''
+```
 npm run dev
-'''
+```
 
 
 Open the localhost link shown in the terminal, usually:  
