@@ -7,6 +7,7 @@ The product is designed to work as a prototype without requiring backend setup. 
 ## Running the Project Locally
 1. Clone the repository
 git clone https://github.com/SyamilC/Taskomon
+
 cd taskomon
 1. Install dependencies
 npm install
@@ -14,11 +15,13 @@ npm install
 npm run dev
 
 Open the localhost link shown in the terminal, usually:
+
 http://localhost:5173
 
 You can use the seeded local demo account:
 
 Email: demo@taskomon.local
+
 Password: demo123
 
 You can also register a new local account inside the app.
