@@ -1,7 +1,8 @@
 import { type FormEvent, useMemo, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { localSeed } from "../data/localSeed";
+import { getLocalSeedForUser } from "../data/localSeed";
+import { GUEST_USER_ID } from "../data/localUsers";
 import { getCurrentSession } from "../services/authService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import {
@@ -16,7 +17,7 @@ import type { Todo, Workflow } from "../types";
 import NavBar from "./NavBar";
 
 function getInitialWorkflowTodos(workflowId: string) {
-  return localSeed.todos.filter(
+  return getLocalSeedForUser(GUEST_USER_ID).todos.filter(
     (todo) => todo.parentType === "workflow" && todo.parentId === workflowId
   );
 }

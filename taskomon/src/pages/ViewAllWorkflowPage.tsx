@@ -1,6 +1,5 @@
 import { Link, Navigate } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoTodos } from "../data/demoData";
 import {
   getCurrentSession,
   getSessionDisplayName,
@@ -9,6 +8,7 @@ import {
 import { loadFromStorage } from "../services/storageServices";
 import {
   getDefaultWorkflowRuntime,
+  getSeedTodosForWorkspace,
   getStoredWorkflows,
   getWorkflowRuntimeStorageKey,
   getWorkflowTodoStorageKey,
@@ -18,9 +18,7 @@ import type { WorkflowRuntimeSummary } from "../services/workspaceStorage";
 import NavBar from "./NavBar";
 
 function getInitialWorkflowTodos(workflowId: string) {
-  return demoTodos.filter(
-    (todo) => todo.parentType === "workflow" && todo.parentId === workflowId
-  );
+  return getSeedTodosForWorkspace(workflowId, "workflow");
 }
 
 function getWorkflowTodos(workflow: Workflow) {

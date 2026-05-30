@@ -6,12 +6,12 @@ import taskomonHappyImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
 import taskomonThinkingImage from "../assets/taskomon/Taskomon-Icon-Thinking.png";
 import taskomonTiredImage from "../assets/taskomon/Taskomon-Icon-Tired.png";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { DEMO_USER_ID, demoTodos } from "../data/demoData";
 import {
   appendBehaviourEvent,
   loadBehaviourEvents,
 } from "../services/behaviourService";
 import {
+  getActiveUserId,
   getCurrentSession,
   getSessionDisplayName,
   isGuestSession,
@@ -25,6 +25,7 @@ import {
 } from "../services/taskomonEngine";
 import {
   getDefaultWorkflowRuntime,
+  getSeedTodosForWorkspace,
   getStoredWorkflows,
   getWorkflowRuntimeStorageKey,
   getWorkflowTodoStorageKey,
@@ -283,8 +284,7 @@ type WorkflowRuntime = WorkflowRuntimeSummary;
 const LAST_OPENED_WORKFLOW_KEY = "taskomon:lastOpenedWorkflowId";
 
 function getInitialWorkflowTodos(workflowId: string) {
-  return demoTodos
-    .filter((todo) => todo.parentType === "workflow" && todo.parentId === workflowId)
+  return getSeedTodosForWorkspace(workflowId, "workflow")
     .map((todo, index) => ({
       ...todo,
       x: todo.x + (index === 0 ? 380 : 460),
@@ -535,6 +535,7 @@ function WorkflowWorkspacePage() {
 }
 
 function WorkflowWorkspaceContent() {
+  const activeUserId = getActiveUserId();
   const navigate = useNavigate();
   const { workflowId: routeWorkflowId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -579,7 +580,7 @@ function WorkflowWorkspaceContent() {
   });
   const [lastCompletionTitle, setLastCompletionTitle] = useState("");
   const [behaviourEvents, setBehaviourEvents] = useState(() =>
-    isGuest ? [] : loadBehaviourEvents(DEMO_USER_ID, workflow.id)
+    isGuest ? [] : loadBehaviourEvents(activeUserId, workflow.id)
   );
   const [timerPhase, setTimerPhase] = useState<PomodoroPhase>(storedTimer.phase);
   const [timerSeconds, setTimerSeconds] = useState(
@@ -656,7 +657,7 @@ function WorkflowWorkspaceContent() {
     }
 
     const event = appendBehaviourEvent({
-      userId: DEMO_USER_ID,
+      userId: activeUserId,
       workspaceId: workflow.id,
       workspaceType: "workflow",
       todoId: todo?.id,
@@ -730,18 +731,18 @@ function WorkflowWorkspaceContent() {
     }
 
     appendBehaviourEvent({
-      userId: DEMO_USER_ID,
+      userId: activeUserId,
       workspaceId: workflow.id,
       workspaceType: "workflow",
       type: "workspace_opened",
     });
 
     const timeoutId = window.setTimeout(() => {
-      setBehaviourEvents(loadBehaviourEvents(DEMO_USER_ID, workflow.id));
+      setBehaviourEvents(loadBehaviourEvents(activeUserId, workflow.id));
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [isGuest, workflow.id]);
+  }, [activeUserId, isGuest, workflow.id]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -823,7 +824,7 @@ function WorkflowWorkspaceContent() {
         if (timerPhase === "focus") {
           if (!isGuest) {
             const timerEvent = appendBehaviourEvent({
-              userId: DEMO_USER_ID,
+              userId: activeUserId,
               workspaceId: workflow.id,
               workspaceType: "workflow",
               type: "timer_completed",
@@ -847,7 +848,7 @@ function WorkflowWorkspaceContent() {
 
         if (!isGuest) {
           const restEvent = appendBehaviourEvent({
-            userId: DEMO_USER_ID,
+            userId: activeUserId,
             workspaceId: workflow.id,
             workspaceType: "workflow",
             type: "rest_taken",
@@ -878,6 +879,7 @@ function WorkflowWorkspaceContent() {
     runtime.status,
     timerPhase,
     timerRunning,
+    activeUserId,
     workflow.id,
   ]);
 

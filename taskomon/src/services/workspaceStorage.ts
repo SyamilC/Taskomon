@@ -1,11 +1,14 @@
-import { localSeed } from "../data/localSeed";
+import { getLocalSeedForUser } from "../data/localSeed";
+import { SHOWCASE_USER_ID } from "../data/localUsers";
 import type { Habit, PomodoroPhase, Todo, Workflow } from "../types";
+import { getCurrentSession } from "./authService";
 import { loadFromStorage, removeFromStorage, saveToStorage } from "./storageServices";
 
 export const HABITS_STORAGE_KEY = "taskomon:habits";
 export const WORKFLOWS_STORAGE_KEY = "taskomon:workflows";
 export const HABIT_STORAGE_PREFIX = "taskomon:habit";
 export const WORKFLOW_STORAGE_PREFIX = "taskomon:workflow";
+export const USER_STORAGE_PREFIX = "taskomon:user";
 
 export type WorkflowRuntimeSummary = Pick<
   Workflow,
@@ -17,20 +20,48 @@ export type WorkflowRuntimeSummary = Pick<
   timerUpdatedAt?: string;
 };
 
-export function getHabitTodoStorageKey(habitId: string) {
-  return `${HABIT_STORAGE_PREFIX}:${habitId}:todos`;
+export function getActiveWorkspaceUserId(userId?: string) {
+  return userId ?? getCurrentSession()?.userId ?? SHOWCASE_USER_ID;
 }
 
-export function getWorkflowTodoStorageKey(workflowId: string) {
-  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:todos`;
+export function getUserStoragePrefix(userId = getActiveWorkspaceUserId()) {
+  return `${USER_STORAGE_PREFIX}:${userId}`;
 }
 
-export function getWorkflowRuntimeStorageKey(workflowId: string) {
-  return `${WORKFLOW_STORAGE_PREFIX}:${workflowId}:runtime`;
+export function getHabitsStorageKey(userId = getActiveWorkspaceUserId()) {
+  return `${getUserStoragePrefix(userId)}:habits`;
 }
 
-function getHabitResetStorageKey(habitId: string) {
-  return `${HABIT_STORAGE_PREFIX}:${habitId}:reset-period`;
+export function getWorkflowsStorageKey(userId = getActiveWorkspaceUserId()) {
+  return `${getUserStoragePrefix(userId)}:workflows`;
+}
+
+export function getHabitTodoStorageKey(
+  habitId: string,
+  userId = getActiveWorkspaceUserId()
+) {
+  return `${getUserStoragePrefix(userId)}:habit:${habitId}:todos`;
+}
+
+export function getWorkflowTodoStorageKey(
+  workflowId: string,
+  userId = getActiveWorkspaceUserId()
+) {
+  return `${getUserStoragePrefix(userId)}:workflow:${workflowId}:todos`;
+}
+
+export function getWorkflowRuntimeStorageKey(
+  workflowId: string,
+  userId = getActiveWorkspaceUserId()
+) {
+  return `${getUserStoragePrefix(userId)}:workflow:${workflowId}:runtime`;
+}
+
+function getHabitResetStorageKey(
+  habitId: string,
+  userId = getActiveWorkspaceUserId()
+) {
+  return `${getUserStoragePrefix(userId)}:habit:${habitId}:reset-period`;
 }
 
 export function getDefaultWorkflowRuntime(
@@ -47,6 +78,16 @@ export function getDefaultWorkflowRuntime(
   };
 }
 
+export function getSeedTodosForWorkspace(
+  parentId: string,
+  parentType: "habit" | "workflow",
+  userId = getActiveWorkspaceUserId()
+) {
+  return getLocalSeedForUser(userId).todos.filter(
+    (todo) => todo.parentType === parentType && todo.parentId === parentId
+  );
+}
+
 function normalizeHabit(habit: Habit): Habit {
   return {
     ...habit,
@@ -56,21 +97,31 @@ function normalizeHabit(habit: Habit): Habit {
 }
 
 export function getStoredHabits() {
-  return loadFromStorage<Habit[]>(HABITS_STORAGE_KEY, localSeed.habits).map(
-    normalizeHabit
-  );
+  const userId = getActiveWorkspaceUserId();
+  const seed = getLocalSeedForUser(userId);
+
+  return loadFromStorage<Habit[]>(
+    getHabitsStorageKey(userId),
+    seed.habits
+  ).map(normalizeHabit);
 }
 
 export function saveStoredHabits(habits: Habit[]) {
-  saveToStorage(HABITS_STORAGE_KEY, habits.map(normalizeHabit));
+  saveToStorage(getHabitsStorageKey(), habits.map(normalizeHabit));
 }
 
 export function getStoredWorkflows() {
-  return loadFromStorage<Workflow[]>(WORKFLOWS_STORAGE_KEY, localSeed.workflows);
+  const userId = getActiveWorkspaceUserId();
+  const seed = getLocalSeedForUser(userId);
+
+  return loadFromStorage<Workflow[]>(
+    getWorkflowsStorageKey(userId),
+    seed.workflows
+  );
 }
 
 export function saveStoredWorkflows(workflows: Workflow[]) {
-  saveToStorage(WORKFLOWS_STORAGE_KEY, workflows);
+  saveToStorage(getWorkflowsStorageKey(), workflows);
 }
 
 export function deleteHabitArtifacts(habitId: string) {

@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import adviceImage from "../assets/taskomon/Taskomon-Advice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
-import { DEMO_USER_ID } from "../data/demoData";
 import { generateAdviceTodos } from "../services/adviceService";
-import { getCurrentSession } from "../services/authService";
+import { getActiveUserId, getCurrentSession } from "../services/authService";
 import { appendBehaviourEvent } from "../services/behaviourService";
 import { saveToStorage } from "../services/storageServices";
 import {
@@ -237,6 +236,7 @@ function SuggestAdvicePage() {
 }
 
 function SuggestAdviceContent() {
+  const activeUserId = getActiveUserId();
   const navigate = useNavigate();
   const location = useLocation();
   const routeState = getRouteState(location.state);
@@ -345,7 +345,7 @@ function SuggestAdviceContent() {
     if (resolvedTargetType === "habit") {
       const habit: Habit = {
         id: workspaceId,
-        userId: DEMO_USER_ID,
+        userId: activeUserId,
         type: "habit",
         title: workspaceTitle,
         description: advice.summary,
@@ -362,7 +362,7 @@ function SuggestAdviceContent() {
       saveStoredHabits(nextHabits);
       saveToStorage(getHabitTodoStorageKey(workspaceId), todos);
       appendBehaviourEvent({
-        userId: DEMO_USER_ID,
+        userId: activeUserId,
         workspaceId,
         workspaceType: "habit",
         type: "suggestion_added",
@@ -376,7 +376,7 @@ function SuggestAdviceContent() {
 
     const workflow: Workflow = {
       id: workspaceId,
-      userId: DEMO_USER_ID,
+      userId: activeUserId,
       type: "workflow",
       title: workspaceTitle,
       description: advice.summary,
@@ -401,7 +401,7 @@ function SuggestAdviceContent() {
       updatedAt: now,
     });
     appendBehaviourEvent({
-      userId: DEMO_USER_ID,
+      userId: activeUserId,
       workspaceId,
       workspaceType: "workflow",
       type: "suggestion_added",

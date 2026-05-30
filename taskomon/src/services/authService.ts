@@ -1,4 +1,9 @@
-import { localUsers, GUEST_USER_ID, type LocalUser } from "../data/localUsers";
+import {
+  GUEST_USER_ID,
+  SHOWCASE_USER_ID,
+  localUsers,
+  type LocalUser,
+} from "../data/localUsers";
 import { isSupabaseConfigured } from "../lib/supabaseClient";
 import {
   loadFromStorage,
@@ -46,6 +51,10 @@ export function getSessionDisplayName(session = getCurrentSession()): string {
 
 export function isGuestSession(session = getCurrentSession()): boolean {
   return session?.mode === "guest";
+}
+
+export function getActiveUserId(session = getCurrentSession()): string {
+  return session?.userId ?? SHOWCASE_USER_ID;
 }
 
 export function loginLocal(email: string, password: string): AppSession {

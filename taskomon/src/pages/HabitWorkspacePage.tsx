@@ -6,12 +6,11 @@ import taskomonHappyImage from "../assets/taskomon/Taskomon-Icon-Happy.png";
 import taskomonThinkingImage from "../assets/taskomon/Taskomon-Icon-Thinking.png";
 import taskomonTiredImage from "../assets/taskomon/Taskomon-Icon-Tired.png";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { DEMO_USER_ID, demoTodos } from "../data/demoData";
 import {
   appendBehaviourEvent,
   loadBehaviourEvents,
 } from "../services/behaviourService";
-import { getCurrentSession } from "../services/authService";
+import { getActiveUserId, getCurrentSession } from "../services/authService";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import {
   createBehaviourSnapshot,
@@ -21,6 +20,7 @@ import {
 } from "../services/taskomonEngine";
 import {
   applyHabitAutoReset,
+  getSeedTodosForWorkspace,
   getHabitTodoStorageKey,
   getStoredHabits,
   saveStoredHabits,
@@ -276,9 +276,7 @@ const LAST_OPENED_HABIT_KEY = "taskomon:lastOpenedHabitId";
 const DEFAULT_DUE_TIME = "18:00";
 
 function getInitialHabitTodos(habitId: string) {
-  const habitTodos = demoTodos.filter(
-    (todo) => todo.parentType === "habit" && todo.parentId === habitId
-  );
+  const habitTodos = getSeedTodosForWorkspace(habitId, "habit");
 
   if (habitTodos.length <= 1) {
     return habitTodos.map((todo) => ({
@@ -549,6 +547,7 @@ function HabitWorkspacePage() {
 }
 
 function HabitWorkspaceContent() {
+  const activeUserId = getActiveUserId();
   const navigate = useNavigate();
   const { habitId: routeHabitId } = useParams();
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -594,7 +593,7 @@ function HabitWorkspaceContent() {
   });
   const [lastCompletionTitle, setLastCompletionTitle] = useState("");
   const [behaviourEvents, setBehaviourEvents] = useState(() =>
-    loadBehaviourEvents(DEMO_USER_ID, habit.id)
+    loadBehaviourEvents(activeUserId, habit.id)
   );
 
   const [todoState, setTodoState] = useState<{
@@ -633,7 +632,7 @@ function HabitWorkspaceContent() {
     } = {}
   ) {
     const event = appendBehaviourEvent({
-      userId: DEMO_USER_ID,
+      userId: activeUserId,
       workspaceId: habit.id,
       workspaceType: "habit",
       todoId: todo?.id,
@@ -694,18 +693,18 @@ function HabitWorkspaceContent() {
 
   useEffect(() => {
     appendBehaviourEvent({
-      userId: DEMO_USER_ID,
+      userId: activeUserId,
       workspaceId: habit.id,
       workspaceType: "habit",
       type: "workspace_opened",
     });
 
     const timeoutId = window.setTimeout(() => {
-      setBehaviourEvents(loadBehaviourEvents(DEMO_USER_ID, habit.id));
+      setBehaviourEvents(loadBehaviourEvents(activeUserId, habit.id));
     }, 0);
 
     return () => window.clearTimeout(timeoutId);
-  }, [habit.id]);
+  }, [activeUserId, habit.id]);
 
   useEffect(() => {
     if (

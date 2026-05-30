@@ -5,15 +5,12 @@ import taskomonconcern from "../assets/taskomon/Taskomon-Icon-Thinking.png";
 import { isSupabaseConfigured } from "../lib/supabaseClient";
 import {
   getBackendMode,
+  getActiveUserId,
   getCurrentSession,
   getSessionDisplayName,
   logout,
 } from "../services/authService";
 import { getMockUserWorkspaces } from "../services/databaseService";
-import {
-  DEMO_USER_ID,
-  demoTodos,
-} from "../data/demoData";
 import {
   createBehaviourSnapshot,
   loadBehaviourEvents,
@@ -25,6 +22,7 @@ import {
   deleteWorkflowArtifacts,
   getDefaultWorkflowRuntime,
   getHabitTodoStorageKey,
+  getSeedTodosForWorkspace,
   getStoredHabits,
   getStoredWorkflows,
   getWorkflowRuntimeStorageKey,
@@ -128,15 +126,11 @@ function getPreviewBubbleDimensions(
 }
 
 function getInitialHabitTodos(habitId: string) {
-  return demoTodos.filter(
-    (todo) => todo.parentType === "habit" && todo.parentId === habitId
-  );
+  return getSeedTodosForWorkspace(habitId, "habit");
 }
 
 function getInitialWorkflowTodos(workflowId: string) {
-  return demoTodos.filter(
-    (todo) => todo.parentType === "workflow" && todo.parentId === workflowId
-  );
+  return getSeedTodosForWorkspace(workflowId, "workflow");
 }
 
 function getStatusLabel(status: TodoStatus) {
@@ -724,14 +718,15 @@ function AuthenticatedDashboardPage({
   const monitoredWorkflowSummaries = workflowSummaries.filter(
     (summary) => summary.runtime.status !== "held"
   );
+  const activeUserId = getActiveUserId(authSession);
   const behaviourEvents = [
     ...habitSummaries.flatMap((summary) =>
-      loadBehaviourEvents(DEMO_USER_ID, summary.habit.id)
+      loadBehaviourEvents(activeUserId, summary.habit.id)
     ),
     ...monitoredWorkflowSummaries.flatMap((summary) =>
-      loadBehaviourEvents(DEMO_USER_ID, summary.workflow.id)
+      loadBehaviourEvents(activeUserId, summary.workflow.id)
     ),
-    ...loadBehaviourEvents(DEMO_USER_ID),
+    ...loadBehaviourEvents(activeUserId),
   ].sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
@@ -949,7 +944,7 @@ function AuthenticatedDashboardPage({
     if (modal.type === "create-habit") {
       const nextHabit: Habit = {
         id: crypto.randomUUID(),
-        userId: DEMO_USER_ID,
+        userId: activeUserId,
         type: "habit",
         title,
         description,
@@ -992,7 +987,7 @@ function AuthenticatedDashboardPage({
       const restMinutes = getMinuteValue(workspaceForm.restMinutes, 5);
       const nextWorkflow: Workflow = {
         id: crypto.randomUUID(),
-        userId: DEMO_USER_ID,
+        userId: activeUserId,
         type: "workflow",
         title,
         description,

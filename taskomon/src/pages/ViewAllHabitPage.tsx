@@ -1,20 +1,18 @@
 import { Link, Navigate } from "react-router-dom";
 import taskomonImage from "../assets/taskomon/taskomon.png";
-import { demoTodos } from "../data/demoData";
 import { loadFromStorage, saveToStorage } from "../services/storageServices";
 import { getCurrentSession } from "../services/authService";
 import {
   applyHabitAutoReset,
   getHabitTodoStorageKey,
+  getSeedTodosForWorkspace,
   getStoredHabits,
 } from "../services/workspaceStorage";
 import type { Habit, Todo } from "../types";
 import NavBar from "./NavBar";
 
 function getInitialHabitTodos(habitId: string) {
-  return demoTodos.filter(
-    (todo) => todo.parentType === "habit" && todo.parentId === habitId
-  );
+  return getSeedTodosForWorkspace(habitId, "habit");
 }
 
 function getHabitTodos(habit: Habit) {

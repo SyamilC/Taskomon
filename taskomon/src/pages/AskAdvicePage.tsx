@@ -3,8 +3,7 @@ import type { FormEvent } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import lookupAdviceImage from "../assets/taskomon/Taskomon-LookupAdvice.png";
 import thinkingIcon from "../assets/taskomon/Taskomon-Icon-Thinking.png";
-import { DEMO_USER_ID } from "../data/demoData";
-import { getCurrentSession } from "../services/authService";
+import { getActiveUserId, getCurrentSession } from "../services/authService";
 import { appendBehaviourEvent } from "../services/behaviourService";
 
 type AdviceTarget = "workflow" | "habit";
@@ -46,7 +45,7 @@ function AskAdviceContent() {
     sessionStorage.setItem("taskomon:advice-query", trimmedQuery);
     sessionStorage.setItem("taskomon:advice-target", targetType);
     appendBehaviourEvent({
-      userId: DEMO_USER_ID,
+      userId: getActiveUserId(),
       type: "advice_requested",
       metadata: {
         note: `${targetType}: ${trimmedQuery}`,
